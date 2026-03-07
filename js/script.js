@@ -1,9 +1,8 @@
 // ==================== KONFIGURASI ====================
-const TUNNEL_URL = 'https://thesaurus-roster-font-photographer.trycloudflare.com';
+const TUNNEL_URL = 'https://sydney-recommendation-looked-perceived.trycloudflare.com';
 const MANIFEST_URL = `${TUNNEL_URL}/tonconnect-manifest.json`;
 
-// GANTI DENGAN ADDRESS WALLET ANDA UNTUK MENERIMA PEMBAYARAN
-const WEB_ADDRESS = 'UQBX9MJCyRK3-eQjh7CgbwB2bR9hT5vYAdzx4uv_CagAo4Ra';
+const WEB_ADDRESS = '0QA9s4GFIMuO7qEF110duSQheIaGtr0T_HHjppW7cRiqiUqX';
 
 const { createTonPayTransfer, TON } = window.TonPay;
 
@@ -278,15 +277,14 @@ async function processDeposit() {
     const { message, reference, bodyBase64Hash } = await createTonPayTransfer(
       {
         amount: amount,
-        asset: "TON", // atau TON constant
-        recipientAddr: WEB_ADDRESS, // Alamat merchant
+        asset: "TON",
+        recipientAddr: WEB_ADDRESS,
         senderAddr: senderAddress,
         commentToSender: "Deposit ke Marketplace",
         commentToRecipient: `Deposit dari user ${telegramUser.id}`,
       },
       {
-        chain: "testnet", // Ganti ke mainnet untuk production
-        // apiKey: "YOUR_API_KEY", // Optional: untuk dashboard merchant
+        chain: "testnet",
       }
     );
 
