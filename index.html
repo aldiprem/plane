@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TON Connect + Telegram Test</title>
+    <link rel="stylesheet" href="/plane/css/style.css">
+    <!-- Tambahkan ini setelah TON Connect UI -->
+    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <!-- TON Pay API -->
+    <script src="https://unpkg.com/@ton-pay/api@latest/dist/index.umd.js"></script>
+    <!-- Telegram Web App -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 TON Connect + Telegram Test</h1>
+        
+        <div class="telegram-card">
+            <h2>📱 Telegram User Data</h2>
+            <div id="telegram-data" class="data-container">
+                <div class="loading">Loading Telegram data...</div>
+            </div>
+        </div>
+
+        <div class="wallet-card">
+          <h2>💎 Wallet Connection</h2>
+          <div id="wallet-data" class="data-container">
+            <div id="ton-connect"></div>
+            <div id="wallet-info" class="hidden">
+              <p><strong>Address:</strong> <span id="wallet-address"></span></p>
+              <p><strong>Balance:</strong> <span id="wallet-balance"></span></p>
+              <button id="deposit-btn" class="btn-primary" onclick="showDepositModal()">
+                💰 Deposit TON
+              </button>
+            </div>
+            <div id="deposit-instructions" class="hidden">
+              <p>✅ Transaction sent! Waiting for confirmation...</p>
+              <p>Transaction hash: <code id="tx-hash"></code></p>
+              <p>Reference: <code id="tx-reference"></code></p>
+              <p><small>Simpan reference ini untuk tracking pembayaran</small></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Balance Card -->
+        <div class="balance-card">
+          <h2>💰 Your Balance</h2>
+          <div class="balance-container">
+            <div class="balance-amount">
+              <span id="user-balance">0 TON</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Transaction History -->
+        <div class="transactions-card">
+          <h2>📊 Transaction History</h2>
+          <div id="transactions-list" class="transactions-container">
+            <div class="loading">Loading transactions...</div>
+          </div>
+        </div>
+
+        <div class="info-card">
+            <h2>📋 Debug Info</h2>
+            <pre id="debug-info"></pre>
+        </div>
+    </div>
+
+    <script src="/plane/js/script.js"></script>
+</body>
+</html>
