@@ -1,10 +1,8 @@
 // ==================== KONFIGURASI ====================
 const CONFIG = {
-    // Ganti dengan URL tunnel Anda
     TUNNEL_URL: 'https://sydney-recommendation-looked-perceived.trycloudflare.com',
-    // Ganti dengan address wallet Anda untuk menerima pembayaran
     WEB_ADDRESS: '0QA9s4GFIMuO7qEF110duSQheIaGtr0T_HHjppW7cRiqiUqX',
-    NETWORK: 'testnet', // 'testnet' atau 'mainnet'
+    NETWORK: 'testnet',
     MIN_DEPOSIT: 0.1,
     DEBUG: true
 };
@@ -12,31 +10,26 @@ const CONFIG = {
 // ==================== GLOBAL VARIABLES ====================
 let tonConnectUI = null;
 let telegramUser = null;
-let tonPay = null;
 
 // ==================== INITIALIZATION ====================
 document.addEventListener('DOMContentLoaded', async () => {
     debugLog('🚀 Application starting...');
     
     try {
-        // Initialize TON Pay
-        if (window.TonPay) {
-            tonPay = window.TonPay;
-            debugLog('✅ TON Pay initialized');
-        } else {
-            debugLog('❌ TON Pay not available');
-        }
-
         // Initialize components
         initTelegram();
         initTonConnect();
-        
-        // Update UI
         updateNetworkBadge();
+        
+        // Check if TON Pay is available
+        if (window.TonPay) {
+            debugLog('✅ TON Pay SDK tersedia');
+        } else {
+            debugLog('⚠️ TON Pay SDK tidak tersedia - menggunakan metode manual');
+        }
         
     } catch (error) {
         debugLog('❌ Initialization error:', error);
-        showError('Failed to initialize application');
     }
 });
 
@@ -244,6 +237,10 @@ function closeModal() {
     document.getElementById('deposit-modal').style.display = 'none';
 }
 
+/**
+ * FUNGSI UTAMA: Proses deposit menggunakan metode manual
+ * karena TON Pay SDK mungkin tidak tersedia
+ */
 async function processDeposit() {
     if (!tonConnectUI?.connected) {
         await tonConnectUI.connect();
@@ -265,59 +262,12 @@ async function processDeposit() {
         // Get sender address
         const senderAddress = tonConnectUI.account?.address;
         
-        // Create TON Pay transfer
-        const { message, reference, bodyBase64Hash } = await tonPay.createTonPayTransfer(
-            {
-                amount: amount,
-                asset: "TON",
-                recipientAddr: CONFIG.WEB_ADDRESS,
-                senderAddr: senderAddress,
-                commentToSender: `Deposit to Marketplace`,
-                commentToRecipient: `Deposit from user ${telegramUser?.id}`,
-            },
-            {
-                chain: CONFIG.NETWORK,
-            }
-        );
-
-        debugLog('📤 TON Pay transaction created:', { message, reference, bodyBase64Hash });
-
-        // Save tracking data
-        await fetch(`${CONFIG.TUNNEL_URL}/api/store-payment-tracking`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                reference,
-                bodyBase64Hash,
-                telegram_id: telegramUser?.id.toString(),
-                amount
-            })
-        });
-
-        // Send transaction
-        const transaction = {
-            validUntil: Math.floor(Date.now() / 1000) + 600,
-            messages: [message]
-        };
-
-        const result = await tonConnectUI.sendTransaction(transaction);
-        debugLog('✅ Transaction sent:', result);
-
-        // Record transaction
-        await fetch(`${CONFIG.TUNNEL_URL}/api/verify-transaction`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                telegram_id: telegramUser?.id.toString(),
-                transaction_hash: result.boc,
-                amount_ton: amount,
-                from_address: senderAddress,
-                reference: reference
-            })
-        });
-
-        // Show success
-        showTransactionSuccess(result.boc, reference);
+        // Coba gunakan TON Pay jika tersedia
+        if (window.TonPay) {
+            await processDepositWithTonPay(amount, senderAddress);
+        } else {
+            await processDepositManual(amount, senderAddress);
+        }
 
     } catch (error) {
         debugLog('❌ Payment failed:', error);
@@ -334,13 +284,133 @@ async function processDeposit() {
     }
 }
 
+/**
+ * Metode 1: Menggunakan TON Pay SDK (jika tersedia)
+ */
+async function processDepositWithTonPay(amount, senderAddress) {
+    debugLog('📤 Menggunakan TON Pay SDK...');
+    
+    // Buat reference unik
+    const timestamp = Date.now();
+    const reference = `deposit_${telegramUser?.id}_${timestamp}`;
+    const bodyHash = await sha256(reference);
+    
+    // Dapatkan payload dari backend atau buat manual
+    const payloadResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/create-payload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            telegram_id: telegramUser?.id.toString(),
+            amount_ton: amount
+        })
+    });
+
+    const payloadData = await payloadResponse.json();
+    
+    if (!payloadData.success) {
+        throw new Error(payloadData.error || 'Failed to create payload');
+    }
+
+    // Simpan tracking data
+    await fetch(`${CONFIG.TUNNEL_URL}/api/store-payment-tracking`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            reference,
+            bodyBase64Hash: bodyHash,
+            telegram_id: telegramUser?.id.toString(),
+            amount
+        })
+    });
+
+    // Kirim transaksi
+    const transaction = {
+        validUntil: Math.floor(Date.now() / 1000) + 600,
+        messages: [payloadData.transaction]
+    };
+
+    const result = await tonConnectUI.sendTransaction(transaction);
+    debugLog('✅ Transaction sent:', result);
+
+    // Record transaction
+    await fetch(`${CONFIG.TUNNEL_URL}/api/verify-transaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            telegram_id: telegramUser?.id.toString(),
+            transaction_hash: result.boc,
+            amount_ton: amount,
+            from_address: senderAddress,
+            reference: reference
+        })
+    });
+
+    showTransactionSuccess(result.boc, reference);
+}
+
+/**
+ * Metode 2: Manual transaction (fallback jika TON Pay tidak tersedia)
+ */
+async function processDepositManual(amount, senderAddress) {
+    debugLog('📤 Menggunakan metode manual...');
+    
+    // Buat transaction manual
+    const amountNano = (amount * 1_000_000_000).toString();
+    
+    const transaction = {
+        validUntil: Math.floor(Date.now() / 1000) + 600,
+        messages: [
+            {
+                address: CONFIG.WEB_ADDRESS,
+                amount: amountNano,
+                // Optional: tambahkan comment
+                payload: null // tanpa payload untuk simplicity
+            }
+        ]
+    };
+
+    debugLog('📤 Sending manual transaction:', transaction);
+
+    // Kirim transaksi
+    const result = await tonConnectUI.sendTransaction(transaction);
+    debugLog('✅ Transaction sent:', result);
+
+    // Buat reference sederhana
+    const reference = `manual_${telegramUser?.id}_${Date.now()}`;
+
+    // Record transaction
+    await fetch(`${CONFIG.TUNNEL_URL}/api/verify-transaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            telegram_id: telegramUser?.id.toString(),
+            transaction_hash: result.boc,
+            amount_ton: amount,
+            from_address: senderAddress,
+            reference: reference
+        })
+    });
+
+    showTransactionSuccess(result.boc, reference);
+}
+
+/**
+ * Helper: SHA256 hash
+ */
+async function sha256(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 function showTransactionSuccess(txHash, reference) {
     document.getElementById('deposit-form').classList.add('hidden');
     document.getElementById('deposit-instructions').classList.remove('hidden');
     document.getElementById('tx-hash').textContent = txHash.slice(0, 30) + '...';
     document.getElementById('tx-reference').textContent = reference;
     
-    // Refresh data
+    // Refresh data after 5 seconds
     setTimeout(() => {
         loadUserBalance();
         loadTransactionHistory();
@@ -504,7 +574,6 @@ function showError(message) {
 }
 
 function showToast(message) {
-    // Simple toast implementation
     const toast = document.createElement('div');
     toast.className = 'status-message success';
     toast.textContent = message;
@@ -528,7 +597,7 @@ function updateNetworkBadge() {
     }
 }
 
-// Show debug panel (for development)
+// Show debug panel
 if (CONFIG.DEBUG) {
     document.getElementById('debug-panel')?.classList.remove('hidden');
 }
