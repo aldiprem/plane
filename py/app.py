@@ -70,12 +70,13 @@ def create_payload():
     # Buat payload menggunakan pytoniq (jika tersedia)
     if TON_LIB_AVAILABLE:
         try:
-            # Buat Cell dengan comment
-            # Format yang benar untuk text comment di TON
-            cell = begin_cell() \
-                .store_uint(0, 32) \  # 0x00000000 untuk text comment
-                .store_string(memo_plain) \
+            # Buat Cell dengan comment - PERBAIKAN SINTAKS
+            cell = (
+                begin_cell()
+                .store_uint(0, 32)      # 0x00000000 untuk text comment
+                .store_string(memo_plain)
                 .end_cell()
+            )
             
             # Encode cell ke Base64 (Bag of Cells)
             payload_base64 = base64.b64encode(cell.to_boc()).decode('utf-8')
