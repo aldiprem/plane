@@ -5,25 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TON Wallet + Telegram</title>
     <link rel="stylesheet" href="/plane/css/style.css">
-    <!-- TON Connect UI -->
-    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
-    <!-- TON Pay API -->
-    <script src="https://unpkg.com/@ton-pay/api@0.0.2/dist/index.umd.js"></script>
     <!-- Telegram Web App -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- TON Connect UI -->
+    <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+    <!-- TON Pay API - PASTIKAN VERSI INI -->
+    <script src="https://unpkg.com/@ton-pay/api@0.0.2/dist/index.umd.js"></script>
 </head>
 <body>
     <div class="app-container">
         <!-- Header -->
         <header class="header">
             <h1>💎 TON Wallet</h1>
-            <div class="network-badge testnet">Testnet</div>
+            <div class="network-badge testnet" id="network-badge">Testnet</div>
         </header>
 
         <!-- Main Content -->
         <main class="main-content">
             <!-- Telegram Profile Card -->
-            <section class="card telegram-card" id="telegram-section">
+            <section class="card telegram-card">
                 <h2 class="card-title">
                     <span>📱 Telegram Profile</span>
                     <span class="status-badge" id="telegram-status">Loading...</span>
@@ -67,9 +67,7 @@
                 <h2 class="card-title">💰 Your Balance</h2>
                 <div class="balance-container">
                     <div class="balance-amount" id="user-balance">0 TON</div>
-                    <div class="balance-actions">
-                        <button class="btn-secondary" onclick="refreshBalance()">🔄 Refresh</button>
-                    </div>
+                    <button class="btn-secondary" onclick="refreshBalance()">🔄 Refresh</button>
                 </div>
             </section>
 
@@ -103,19 +101,8 @@
                             min="0.1" 
                             step="0.1" 
                             value="1.0"
-                            placeholder="Enter amount"
                         >
                         <small class="input-hint">Minimum: 0.1 TON</small>
-                    </div>
-
-                    <div class="info-box">
-                        <div class="info-row">
-                            <span class="info-label">Recipient Address:</span>
-                            <div class="address-container">
-                                <code id="deposit-address" class="address-code">Loading...</code>
-                                <button class="icon-btn" onclick="copyDepositAddress()">📋</button>
-                            </div>
-                        </div>
                     </div>
 
                     <button id="send-deposit-btn" class="btn-primary btn-large" onclick="processDeposit()">
@@ -131,17 +118,11 @@
                     <div class="info-box">
                         <div class="info-row">
                             <span class="info-label">Transaction Hash:</span>
-                            <div class="address-container">
-                                <code id="tx-hash" class="tx-hash"></code>
-                                <button class="icon-btn" onclick="copyTxHash()">📋</button>
-                            </div>
+                            <code id="tx-hash" class="tx-hash"></code>
                         </div>
                         <div class="info-row">
                             <span class="info-label">Reference:</span>
-                            <div class="address-container">
-                                <code id="tx-reference" class="tx-reference"></code>
-                                <button class="icon-btn" onclick="copyReference()">📋</button>
-                            </div>
+                            <code id="tx-reference" class="tx-reference"></code>
                         </div>
                     </div>
                     
@@ -150,8 +131,8 @@
             </div>
         </div>
 
-        <!-- Debug Panel (Hidden by default) -->
-        <div class="debug-panel hidden" id="debug-panel">
+        <!-- Debug Panel -->
+        <div class="debug-panel" id="debug-panel">
             <div class="debug-header" onclick="toggleDebug()">
                 <span>🐛 Debug Info</span>
                 <span class="toggle-icon">▼</span>
