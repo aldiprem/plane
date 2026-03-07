@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TON Connect + Telegram Test</title>
+    <title>TON Wallet + Telegram</title>
     <link rel="stylesheet" href="/plane/css/style.css">
-    <!-- Tambahkan ini setelah TON Connect UI -->
+    <!-- TON Connect UI -->
     <script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
     <!-- TON Pay API -->
     <script src="https://unpkg.com/@ton-pay/api@latest/dist/index.umd.js"></script>
@@ -13,57 +13,150 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 TON Connect + Telegram Test</h1>
-        
-        <div class="telegram-card">
-            <h2>📱 Telegram User Data</h2>
-            <div id="telegram-data" class="data-container">
-                <div class="loading">Loading Telegram data...</div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>💎 TON Wallet</h1>
+            <div class="network-badge testnet">Testnet</div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Telegram Profile Card -->
+            <section class="card telegram-card" id="telegram-section">
+                <h2 class="card-title">
+                    <span>📱 Telegram Profile</span>
+                    <span class="status-badge" id="telegram-status">Loading...</span>
+                </h2>
+                <div id="telegram-profile" class="profile-container">
+                    <div class="loading-spinner">Loading...</div>
+                </div>
+            </section>
+
+            <!-- Wallet Connection Card -->
+            <section class="card wallet-card">
+                <h2 class="card-title">
+                    <span>🔌 Wallet Connection</span>
+                    <span class="status-badge" id="wallet-status">Disconnected</span>
+                </h2>
+                <div class="wallet-container">
+                    <div id="ton-connect" class="ton-connect-button"></div>
+                    
+                    <div id="wallet-info" class="wallet-info hidden">
+                        <div class="info-row">
+                            <span class="info-label">Address:</span>
+                            <div class="address-container">
+                                <span id="wallet-address" class="wallet-address"></span>
+                                <button class="icon-btn copy-btn" onclick="copyAddress()" title="Copy Address">📋</button>
+                            </div>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Balance:</span>
+                            <span id="wallet-balance" class="wallet-balance">0 TON</span>
+                        </div>
+                        
+                        <button class="btn-primary" onclick="showDepositModal()">
+                            <span>💰</span> Deposit TON
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Balance Card -->
+            <section class="card balance-card">
+                <h2 class="card-title">💰 Your Balance</h2>
+                <div class="balance-container">
+                    <div class="balance-amount" id="user-balance">0 TON</div>
+                    <div class="balance-actions">
+                        <button class="btn-secondary" onclick="refreshBalance()">🔄 Refresh</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Transactions Card -->
+            <section class="card transactions-card">
+                <h2 class="card-title">
+                    <span>📊 Transactions</span>
+                    <button class="icon-btn" onclick="refreshTransactions()" title="Refresh">🔄</button>
+                </h2>
+                <div id="transactions-list" class="transactions-container">
+                    <div class="loading-spinner">Loading transactions...</div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Deposit Modal -->
+        <div id="deposit-modal" class="modal">
+            <div class="modal-content">
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+                <h3 class="modal-title">💎 Deposit TON</h3>
+                
+                <div id="deposit-status" class="status-message hidden"></div>
+                
+                <div class="deposit-form" id="deposit-form">
+                    <div class="form-group">
+                        <label for="deposit-amount">Amount (TON):</label>
+                        <input 
+                            type="number" 
+                            id="deposit-amount" 
+                            class="form-input"
+                            min="0.1" 
+                            step="0.1" 
+                            value="1.0"
+                            placeholder="Enter amount"
+                        >
+                        <small class="input-hint">Minimum: 0.1 TON</small>
+                    </div>
+
+                    <div class="info-box">
+                        <div class="info-row">
+                            <span class="info-label">Recipient Address:</span>
+                            <div class="address-container">
+                                <code id="deposit-address" class="address-code">Loading...</code>
+                                <button class="icon-btn" onclick="copyDepositAddress()">📋</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="send-deposit-btn" class="btn-primary btn-large" onclick="processDeposit()">
+                        <span>💸</span> Send from Wallet
+                    </button>
+                </div>
+
+                <div id="deposit-instructions" class="deposit-instructions hidden">
+                    <div class="success-icon">✅</div>
+                    <h4>Transaction Sent!</h4>
+                    <p>Waiting for confirmation...</p>
+                    
+                    <div class="info-box">
+                        <div class="info-row">
+                            <span class="info-label">Transaction Hash:</span>
+                            <div class="address-container">
+                                <code id="tx-hash" class="tx-hash"></code>
+                                <button class="icon-btn" onclick="copyTxHash()">📋</button>
+                            </div>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">Reference:</span>
+                            <div class="address-container">
+                                <code id="tx-reference" class="tx-reference"></code>
+                                <button class="icon-btn" onclick="copyReference()">📋</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <button class="btn-secondary btn-full" onclick="closeModal()">Close</button>
+                </div>
             </div>
         </div>
 
-        <div class="wallet-card">
-          <h2>💎 Wallet Connection</h2>
-          <div id="wallet-data" class="data-container">
-            <div id="ton-connect"></div>
-            <div id="wallet-info" class="hidden">
-              <p><strong>Address:</strong> <span id="wallet-address"></span></p>
-              <p><strong>Balance:</strong> <span id="wallet-balance"></span></p>
-              <button id="deposit-btn" class="btn-primary" onclick="showDepositModal()">
-                💰 Deposit TON
-              </button>
+        <!-- Debug Panel (Hidden by default) -->
+        <div class="debug-panel hidden" id="debug-panel">
+            <div class="debug-header" onclick="toggleDebug()">
+                <span>🐛 Debug Info</span>
+                <span class="toggle-icon">▼</span>
             </div>
-            <div id="deposit-instructions" class="hidden">
-              <p>✅ Transaction sent! Waiting for confirmation...</p>
-              <p>Transaction hash: <code id="tx-hash"></code></p>
-              <p>Reference: <code id="tx-reference"></code></p>
-              <p><small>Simpan reference ini untuk tracking pembayaran</small></p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Balance Card -->
-        <div class="balance-card">
-          <h2>💰 Your Balance</h2>
-          <div class="balance-container">
-            <div class="balance-amount">
-              <span id="user-balance">0 TON</span>
-            </div>
-          </div>
-        </div>
-        
-        <!-- Transaction History -->
-        <div class="transactions-card">
-          <h2>📊 Transaction History</h2>
-          <div id="transactions-list" class="transactions-container">
-            <div class="loading">Loading transactions...</div>
-          </div>
-        </div>
-
-        <div class="info-card">
-            <h2>📋 Debug Info</h2>
-            <pre id="debug-info"></pre>
+            <pre id="debug-info" class="debug-content"></pre>
         </div>
     </div>
 
