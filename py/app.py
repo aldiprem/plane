@@ -201,10 +201,13 @@ def withdraw():
         # Buat fungsi async
         async def process_withdraw():
             # Gunakan WalletV4R2 (yang tersedia)
-            from pytoniq import WalletV4R2, LiteBalancer
+            from pytoniq import WalletV4R2, TonCenterV3Provider
             
-            # Buat provider LiteBalancer untuk koneksi ke blockchain
-            provider = LiteBalancer.from_mainnet_config(1)  # 1 = jumlah liteserver
+            # Buat provider TON Center V3
+            provider = TonCenterV3Provider(
+                base_url='https://toncenter.com/api/v3/',
+                api_key=TONCENTER_API_KEY
+            )
             
             # Start provider
             await provider.start()
