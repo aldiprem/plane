@@ -203,10 +203,10 @@ def withdraw():
             # Gunakan WalletV4R2 (yang tersedia)
             from pytoniq import WalletV4R2
             
-            # Buat wallet dari private key
+            # Buat wallet dari private key - TANPA parameter workchain!
             wallet = await WalletV4R2.from_private_key(
-                private_key=PRIVATE_KEY_BYTES,
-                workchain=0
+                private_key=PRIVATE_KEY_BYTES
+                # workchain TIDAK PERLU karena default 0
             )
             
             # Verifikasi address
@@ -291,8 +291,11 @@ def withdraw():
             )
             
             # Catat di withdraw_requests
-            db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
-            db.update_withdraw_request_with_hash(result['transaction_hash'], telegram_id)
+            try:
+                db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
+                db.update_withdraw_request_with_hash(result['transaction_hash'], telegram_id)
+            except:
+                pass  # Abaikan error jika tabel belum ada
             
             return jsonify({
                 'success': True,
