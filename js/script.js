@@ -2,7 +2,7 @@
 const CONFIG = {
     // Ganti dengan URL tunnel Anda
     TUNNEL_URL: 'https://sydney-recommendation-looked-perceived.trycloudflare.com',
-    WEB_ADDRESS: '0QA9s4GFIMuO7qEF110duSQheIaGtr0T_HHjppW7cRiqiUqX',
+    WEB_ADDRESS: 'UQBX9MJCyRK3-eQjh7CgbwB2bR9hT5vYAdzx4uv_CagAo4Ra',
     NETWORK: 'mainnet',
     MIN_DEPOSIT: 0.1,
     DEBUG: true
