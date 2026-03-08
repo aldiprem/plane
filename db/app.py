@@ -273,3 +273,35 @@ class Database:
                 ORDER BY created_at DESC LIMIT 1
             ''', (transaction_hash, telegram_id))
             conn.commit()
+            
+    def save_withdraw_request_with_reference(self, user_id, telegram_id, amount_ton, destination_address, reference):
+        """Save withdraw request with reference"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                INSERT INTO withdraw_requests (user_id, telegram_id, amount_ton, destination_address, reference, status)
+                VALUES (?, ?, ?, ?, ?, ?)
+                RETURNING id
+            ''', (user_id, telegram_id, amount_ton, destination_address, reference, 'pending'))
+            result = cursor.fetchone()
+            conn.commit()
+            return result[0] if result else None
+    
+    def update_withdraw_request_by_reference(self, reference, transaction_hash, status='completed'):
+        """Update withdraw request by reference"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                UPDATE withdraw_requests 
+                SET status = ?, transaction_hash = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE reference = ?
+            ''', (status, transaction_hash, reference))
+            conn.commit()
+    
+    def update_payment_tracking_status(self, reference, status='completed', transaction_hash=None):
+        """Update payment tracking status"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                UPDATE payment_tracking 
+                SET status = ?, transaction_hash = ?
+                WHERE reference = ?
+            ''', (status, transaction_hash, reference))
+            conn.commit()
