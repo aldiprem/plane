@@ -102,7 +102,7 @@ async function processWithdraw() {
     // 2. GUNAKAN ENDPOINT TEST (tidak mengirim TON sungguhan)
     showWithdrawStatus('⏳ Processing withdrawal (TEST MODE)...', 'info');
 
-    const processResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/process-withdraw-test`, {
+    const processResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/process-withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
