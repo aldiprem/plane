@@ -53,7 +53,7 @@ try:
     # Cek ketersediaan wallet V4R2 (yang tersedia)
     WALLET_AVAILABLE = False
     try:
-        from pytoniq import WalletV4R2
+        from pytoniq import WalletV4R2, LiteBalancer
         WALLET_AVAILABLE = True
         print("✅ WalletV4R2 tersedia - akan digunakan untuk withdraw")
     except ImportError as e:
@@ -201,76 +201,86 @@ def withdraw():
         # Buat fungsi async
         async def process_withdraw():
             # Gunakan WalletV4R2 (yang tersedia)
-            from pytoniq import WalletV4R2
+            from pytoniq import WalletV4R2, LiteBalancer
             
-            # Buat wallet dari private key - TANPA parameter workchain!
-            wallet = await WalletV4R2.from_private_key(
-                private_key=PRIVATE_KEY_BYTES
-                # workchain TIDAK PERLU karena default 0
-            )
+            # Buat provider LiteBalancer untuk koneksi ke blockchain
+            provider = LiteBalancer.from_mainnet_config(1)  # 1 = jumlah liteserver
             
-            # Verifikasi address
-            wallet_address = wallet.address.to_string()
-            print(f"📌 Wallet address: {wallet_address}")
+            # Start provider
+            await provider.start()
             
-            # Dapatkan seqno
             try:
-                seqno = await wallet.seqno()
-                print(f"📊 Seqno: {seqno}")
-            except:
-                seqno = 0
-                print(f"⚠️ Gagal get seqno, pakai 0")
-            
-            # Buat comment/memo
-            timestamp = int(time.time())
-            comment = f"wd_{telegram_id[-6:]}_{timestamp}"
-            
-            # Buat payload dengan comment
-            comment_bytes = comment.encode('utf-8')
-            payload_cell = begin_cell() \
-                .store_uint(0, 32) \
-                .store_bytes(comment_bytes) \
-                .end_cell()
-            
-            # Konversi amount ke nanoTON
-            amount_nano = int(amount_ton * 1_000_000_000)
-            
-            print(f"📤 Sending {amount_ton} TON ({amount_nano} nano)")
-            print(f"💬 Comment: {comment}")
-            
-            # Buat transfer
-            transfer = await wallet.transfer(
-                destination=destination_address,
-                amount=amount_nano,
-                body=payload_cell,
-                seqno=seqno
-            )
-            
-            # Kirim ke blockchain via TON Center
-            boc_b64 = transfer.to_boc().base64()
-            
-            send_response = requests.post(
-                'https://toncenter.com/api/v2/sendBoc',
-                data={'boc': boc_b64},
-                headers={'X-API-Key': TONCENTER_API_KEY},
-                timeout=30
-            )
-            
-            send_result = send_response.json()
-            print(f"📡 TON Center response: {send_result}")
-            
-            if send_result.get('ok'):
-                tx_hash = hashlib.sha256(transfer.to_boc()).hexdigest()
-                return {
-                    'success': True, 
-                    'transaction_hash': tx_hash,
-                    'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
-                }
-            else:
-                return {
-                    'success': False, 
-                    'error': send_result.get('error', 'Unknown error')
-                }
+                # Buat wallet dari private key dengan provider
+                wallet = await WalletV4R2.from_private_key(
+                    provider=provider,
+                    private_key=PRIVATE_KEY_BYTES
+                )
+                
+                # Verifikasi address
+                wallet_address = wallet.address.to_string()
+                print(f"📌 Wallet address: {wallet_address}")
+                
+                # Dapatkan seqno
+                try:
+                    seqno = await wallet.seqno()
+                    print(f"📊 Seqno: {seqno}")
+                except Exception as e:
+                    seqno = 0
+                    print(f"⚠️ Gagal get seqno, pakai 0: {e}")
+                
+                # Buat comment/memo
+                timestamp = int(time.time())
+                comment = f"wd_{telegram_id[-6:]}_{timestamp}"
+                
+                # Buat payload dengan comment
+                comment_bytes = comment.encode('utf-8')
+                payload_cell = begin_cell() \
+                    .store_uint(0, 32) \
+                    .store_bytes(comment_bytes) \
+                    .end_cell()
+                
+                # Konversi amount ke nanoTON
+                amount_nano = int(amount_ton * 1_000_000_000)
+                
+                print(f"📤 Sending {amount_ton} TON ({amount_nano} nano)")
+                print(f"💬 Comment: {comment}")
+                
+                # Buat transfer
+                transfer = await wallet.transfer(
+                    destination=destination_address,
+                    amount=amount_nano,
+                    body=payload_cell,
+                    seqno=seqno
+                )
+                
+                # Kirim ke blockchain via TON Center
+                boc_b64 = transfer.to_boc().base64()
+                
+                send_response = requests.post(
+                    'https://toncenter.com/api/v2/sendBoc',
+                    data={'boc': boc_b64},
+                    headers={'X-API-Key': TONCENTER_API_KEY},
+                    timeout=30
+                )
+                
+                send_result = send_response.json()
+                print(f"📡 TON Center response: {send_result}")
+                
+                if send_result.get('ok'):
+                    tx_hash = hashlib.sha256(transfer.to_boc()).hexdigest()
+                    return {
+                        'success': True, 
+                        'transaction_hash': tx_hash,
+                        'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
+                    }
+                else:
+                    return {
+                        'success': False, 
+                        'error': send_result.get('error', 'Unknown error')
+                    }
+            finally:
+                # Pastikan provider di-close
+                await provider.close()
         
         # Jalankan async
         loop = asyncio.new_event_loop()
