@@ -17,6 +17,7 @@ class Database:
     def init_database(self):
         """Initialize database tables"""
         with self.get_connection() as conn:
+            # Create users table
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +32,7 @@ class Database:
                 )
             ''')
             
+            # Create sessions table
             conn.execute('''
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,8 +44,9 @@ class Database:
                 )
             ''')
 
+            # Create transactions table with IF NOT EXISTS
             conn.execute('''
-                CREATE TABLE transactions (
+                CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     transaction_hash TEXT UNIQUE,
@@ -61,8 +64,36 @@ class Database:
                 )
             ''')
             
+            # Create withdraw_requests table
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS withdraw_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    telegram_id TEXT,
+                    amount_ton REAL,
+                    destination_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    transaction_hash TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP
+                )
+            ''')
+            
+            # Create payment_tracking table
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS payment_tracking (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reference TEXT UNIQUE,
+                    body_base64_hash TEXT,
+                    telegram_id TEXT,
+                    amount REAL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             conn.commit()
-            print(f"✅ Database reinitialized at {self.db_path}")
+            print(f"✅ Database initialized at {self.db_path}")
     
     def save_user(self, telegram_id, telegram_username=None, 
                   telegram_first_name=None, telegram_last_name=None,
@@ -142,7 +173,7 @@ class Database:
                 RETURNING id
             ''', (
                 user_id, transaction_hash, amount_ton, amount_nano,
-                from_address, to_address, memo, nft_id, transaction_type, 'confirmed'  # Langsung confirmed
+                from_address, to_address, memo, nft_id, transaction_type, 'confirmed'
             ))
             result = cursor.fetchone()
             conn.commit()
@@ -187,3 +218,36 @@ class Database:
         except Exception as e:
             print(f"Error getting balance: {e}")
             return 0.0
+    
+    def save_withdraw_request(self, user_id, telegram_id, amount_ton, destination_address):
+        """Save withdraw request"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                INSERT INTO withdraw_requests (user_id, telegram_id, amount_ton, destination_address)
+                VALUES (?, ?, ?, ?)
+                RETURNING id
+            ''', (user_id, telegram_id, amount_ton, destination_address))
+            result = cursor.fetchone()
+            conn.commit()
+            return result[0] if result else None
+    
+    def get_withdraw_requests(self, telegram_id, limit=20):
+        """Get user withdraw requests"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                SELECT * FROM withdraw_requests 
+                WHERE telegram_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            ''', (telegram_id, limit))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def update_withdraw_request(self, request_id, transaction_hash, status='completed'):
+        """Update withdraw request status"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                UPDATE withdraw_requests 
+                SET status = ?, transaction_hash = ?, processed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (status, transaction_hash, request_id))
+            conn.commit()
