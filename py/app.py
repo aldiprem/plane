@@ -589,8 +589,8 @@ def store_payment_tracking():
     return jsonify({'success': True})
 
 @app.route('/api/process-withdraw', methods=['POST'])
-def process_withdraw_simple():
-    """Versi sederhana withdraw menggunakan TON Center API"""
+def process_withdraw():
+    """Versi REAL - mengirim TON sungguhan menggunakan TON Center API"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
@@ -617,48 +617,91 @@ def process_withdraw_simple():
             'error': f'Saldo tidak cukup. Anda memiliki {current_balance} TON'
         }), 400
     
+    # Validasi private key
+    if not PRIVATE_KEY_BYTES:
+        return jsonify({'success': False, 'error': 'Private key tidak tersedia di server'}), 500
+    
     try:
-        # Generate transaction hash (akan diganti dengan hash real dari TON Center)
-        timestamp = int(time.time())
-        tx_hash = f"toncenter_{timestamp}_{telegram_id[-4:]}"
+        # Gunakan TON Center API untuk mengirim transaksi
+        # https://toncenter.com/api/v2/#/accounts/post_sendTransaction
         
-        print(f"📤 Processing REAL withdraw for user {telegram_id}")
-        print(f"   Amount: {amount_ton} TON")
+        # Konversi amount ke nanoTON
+        amount_nano = int(amount_ton * 1_000_000_000)
+        
+        # Buat comment
+        comment = f"wd:{telegram_id}:{reference}"
+        
+        # Encode comment ke base64
+        comment_bytes = comment.encode('utf-8')
+        comment_b64 = base64.b64encode(comment_bytes).decode('utf-8')
+        
+        # Siapkan payload untuk TON Center
+        payload = {
+            "address": WEB_ADDRESS,  # Dari alamat merchant
+            "to": destination_address,  # Ke alamat user
+            "amount": amount_nano,  # Dalam nanoTON
+            "comment": comment,  # Comment biasa
+            # Atau gunakan payload jika perlu
+            # "payload": comment_b64
+        }
+        
+        print(f"📤 Mengirim transaksi REAL ke TON Center...")
+        print(f"   From: {WEB_ADDRESS}")
         print(f"   To: {destination_address}")
-        print(f"   Reference: {reference}")
+        print(f"   Amount: {amount_ton} TON ({amount_nano} nano)")
         
-        # TODO: Implementasi actual TON Center API call di sini
-        # Untuk sekarang, kita catat dulu di database
+        # Kirim ke TON Center API
+        headers = {
+            'X-API-Key': TONCENTER_API_KEY,
+            'Content-Type': 'application/json'
+        }
         
-        # Simpan transaksi withdraw (negative amount)
-        tx_id = db.save_transaction(
-            user_id=user['id'],
-            transaction_hash=tx_hash,
-            amount_ton=-amount_ton,
-            from_address=WEB_ADDRESS,
-            to_address=destination_address,
-            memo=f"withdraw:{reference}",
-            transaction_type='withdraw'
+        response = requests.post(
+            'https://toncenter.com/api/v2/transactions/send',
+            json=payload,
+            headers=headers,
+            timeout=30
         )
         
-        if not tx_id:
-            return jsonify({'success': False, 'error': 'Gagal menyimpan transaksi'}), 500
+        result = response.json()
         
-        # Update withdraw request
-        db.update_withdraw_request_by_reference(reference, tx_hash, 'completed')
-        
-        # Update payment tracking
-        db.update_payment_tracking_status(reference, 'completed', tx_hash)
-        
-        return jsonify({
-            'success': True,
-            'transaction_hash': tx_hash,
-            'amount_ton': amount_ton,
-            'message': 'Withdraw sedang diproses di blockchain'
-        })
+        if result.get('ok'):
+            transaction_hash = result.get('result')
+            print(f"✅ Transaksi berhasil dikirim: {transaction_hash}")
+            
+            # Simpan transaksi withdraw (negative amount)
+            tx_id = db.save_transaction(
+                user_id=user['id'],
+                transaction_hash=transaction_hash,
+                amount_ton=-amount_ton,
+                from_address=WEB_ADDRESS,
+                to_address=destination_address,
+                memo=f"withdraw:{reference}",
+                transaction_type='withdraw'
+            )
+            
+            # Update withdraw request
+            db.update_withdraw_request_by_reference(reference, transaction_hash, 'completed')
+            
+            # Update payment tracking
+            db.update_payment_tracking_status(reference, 'completed', transaction_hash)
+            
+            return jsonify({
+                'success': True,
+                'transaction_hash': transaction_hash,
+                'amount_ton': amount_ton,
+                'message': 'Withdraw berhasil dikirim ke blockchain!'
+            })
+        else:
+            error_msg = result.get('error', 'Unknown error')
+            print(f"❌ Gagal mengirim transaksi: {error_msg}")
+            return jsonify({
+                'success': False,
+                'error': f'Gagal mengirim transaksi: {error_msg}'
+            }), 500
         
     except Exception as e:
-        print(f"❌ Error in withdraw: {e}")
+        print(f"❌ Error in withdraw real: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
