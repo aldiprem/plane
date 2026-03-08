@@ -199,20 +199,16 @@ def withdraw():
         print(f"   From: {WEB_ADDRESS}")
         
         async def process_withdraw():
-            # Gunakan WalletV4R2 (yang tersedia)
-            from pytoniq import WalletV4R2, LiteClient
+            # Gunakan WalletV4R2 dan LiteBalancer
+            from pytoniq import WalletV4R2, LiteBalancer
             
-            # Buat provider LiteClient untuk koneksi ke blockchain
-            # from_mainnet_config() tanpa parameter atau dengan config yang benar
-            provider = LiteClient.from_mainnet_config(
-                trust_level=0  # Hanya trust_level yang diterima
+            # Buat LiteBalancer (bukan LiteClient) - lebih stabil dengan multiple peers
+            provider = LiteBalancer.from_mainnet_config(
+                trust_level=1  # trust_level 1 cukup untuk verifikasi tanpa sinkronisasi penuh
             )
             
-            # Atau alternatif: from_config() dengan konfigurasi lengkap
-            # provider = LiteClient.from_mainnet_config()  # tanpa parameter
-            
-            # CONNECT
-            await provider.connect()
+            # START_UP, bukan connect!
+            await provider.start_up()
             
             try:
                 # Buat wallet dari private key dengan provider
@@ -301,8 +297,8 @@ def withdraw():
                 traceback.print_exc()
                 raise
             finally:
-                # Pastikan provider di-close
-                await provider.close()
+                # CLOSE_ALL untuk LiteBalancer
+                await provider.close_all()
         
         # Jalankan async
         loop = asyncio.new_event_loop()
