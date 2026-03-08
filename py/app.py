@@ -216,24 +216,28 @@ def verify_withdraw():
         return jsonify({'success': False, 'error': 'Reference tidak ditemukan'}), 400
     
     try:
-        # Cari tracking data berdasarkan reference
         # Update status di payment_tracking
-        # TODO: Implement method di Database untuk update payment_tracking
+        db.update_payment_tracking_status(reference, status, transaction_hash)
         
-        # Update withdraw_requests jika ada
-        # TODO: Implement method di Database untuk update withdraw_request berdasarkan reference
+        # Update withdraw_requests berdasarkan reference
+        db.update_withdraw_request_by_reference(reference, transaction_hash, status)
         
-        # Catat transaksi withdraw di tabel transactions
-        # Kita perlu mendapatkan user_id dari reference
-        # Asumsi: reference format "wd_{telegram_id}_{timestamp}"
+        # Dapatkan telegram_id dari reference (format: wd_telegram_id_timestamp)
         parts = reference.split('_')
-        if len(parts) >= 2:
+        if len(parts) >= 2 and parts[0] == 'wd':
             telegram_id = parts[1]
             user = db.get_user(telegram_id)
             
             if user and transaction_hash:
-                # Ambil amount dari payment_tracking atau data lain
-                # Untuk sementara, kita update status saja
+                # Dapatkan amount dari payment_tracking
+                # Untuk sementara, kita gunakan amount dari request nanti
+                # Atau bisa query dari payment_tracking
+                
+                # Catat transaksi withdraw di tabel transactions
+                # Ini akan mengurangi saldo user
+                # TODO: Dapatkan amount dari database
+                amount_ton = 0  # Harusnya diambil dari payment_tracking
+                
                 print(f"✅ Withdraw confirmed: {reference} - {transaction_hash}")
         
         return jsonify({
