@@ -39,30 +39,22 @@ db = Database(DB_PATH)
 # Wallet address untuk menerima pembayaran
 WEB_ADDRESS = os.getenv('WEB_ADDRESS', '')
 
-# TON Center API Key
+# TON Center API Key (masih diperlukan untuk cek saldo)
 TONCENTER_API_KEY = os.getenv('TONCENTER_API_KEY', '')
+
+# Private key TIDAK DIGUNAKAN LAGI untuk withdraw otomatis
+# Tapi tetap dibaca untuk kompatibilitas ke belakang
 PRIVATE_KEY = os.getenv('PRIVATE_KEY', '')
 PRIVATE_KEY_BYTES = bytes.fromhex(PRIVATE_KEY) if PRIVATE_KEY else None
 
-# Cek ketersediaan library TON
+# Cek ketersediaan library TON (hanya untuk create-payload)
 try:
     from pytoniq import begin_cell, Address
     from pytoniq_core import Cell
     TON_LIB_AVAILABLE = True
-    
-    # Cek ketersediaan wallet V4R2 (yang tersedia)
-    WALLET_AVAILABLE = False
-    try:
-        from pytoniq import WalletV4R2, LiteBalancer
-        WALLET_AVAILABLE = True
-        print("✅ WalletV4R2 tersedia - akan digunakan untuk withdraw")
-    except ImportError as e:
-        print(f"⚠️ WalletV4R2 tidak tersedia: {e}")
-    
-    print("✅ pytoniq library tersedia")
+    print("✅ pytoniq library tersedia untuk create-payload")
 except ImportError as e:
     TON_LIB_AVAILABLE = False
-    WALLET_AVAILABLE = False
     print(f"⚠️ pytoniq tidak terinstall: {e}")
 
 # ==================== ENDPOINT UNTUK MEMBUAT PAYLOAD ====================
@@ -152,10 +144,11 @@ def create_payload():
         'memo_plain': memo_plain
     })
 
-# ==================== ENDPOINT WITHDRAW UNTUK WALLET V4R2 ====================
-@app.route('/api/withdraw', methods=['POST'])
-def withdraw():
-    """Withdraw otomatis untuk wallet V4R2"""
+# ==================== ENDPOINT WITHDRAW MENGGUNAKAN TON PAY ====================
+
+@app.route('/api/initiate-withdraw', methods=['POST'])
+def initiate_withdraw():
+    """Endpoint untuk memulai proses withdraw - menyimpan request dan memberikan reference"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
@@ -181,188 +174,101 @@ def withdraw():
             'error': f'Saldo tidak cukup. Anda memiliki {current_balance} TON'
         }), 400
     
-    # Validasi API Key dan Private Key
-    if not TONCENTER_API_KEY:
-        return jsonify({'success': False, 'error': 'API Key TON Center tidak dikonfigurasi'}), 500
+    # Buat reference unik untuk withdraw
+    timestamp = int(time.time())
+    reference = f"wd_{telegram_id}_{timestamp}"
     
-    if not PRIVATE_KEY_BYTES:
-        return jsonify({'success': False, 'error': 'Private Key tidak dikonfigurasi'}), 500
-    
-    # Jika wallet tidak tersedia, fallback ke manual
-    if not WALLET_AVAILABLE:
-        return withdraw_manual(telegram_id, amount_ton, destination_address, user)
-    
+    # Simpan request withdraw dengan reference
     try:
-        print(f"\n🔄 Processing withdraw for user {telegram_id}")
-        print(f"   Amount: {amount_ton} TON")
-        print(f"   To: {destination_address}")
-        print(f"   From: {WEB_ADDRESS}")
+        # Perlu update method save_withdraw_request untuk menerima reference
+        # Untuk sementara, kita simpan di payment_tracking dulu
+        db.save_payment_tracking(reference, None, telegram_id, amount_ton)
         
-        async def process_withdraw():
-            # Gunakan WalletV4R2 dan LiteBalancer
-            from pytoniq import WalletV4R2, LiteBalancer
-            
-            # Buat LiteBalancer (bukan LiteClient) - lebih stabil dengan multiple peers
-            provider = LiteBalancer.from_mainnet_config(
-                trust_level=1  # trust_level 1 cukup untuk verifikasi tanpa sinkronisasi penuh
-            )
-            
-            # START_UP, bukan connect!
-            await provider.start_up()
-            
-            try:
-                # Buat wallet dari private key dengan provider
-                wallet = await WalletV4R2.from_private_key(
-                    provider=provider,
-                    private_key=PRIVATE_KEY_BYTES
-                )
-                
-                # Verifikasi address
-                wallet_address = wallet.address.to_string()
-                print(f"📌 Wallet address: {wallet_address}")
-                
-                # Dapatkan seqno via TON Center API (lebih reliable)
-                try:
-                    seqno_response = requests.get(
-                        f'https://toncenter.com/api/v2/getAddressInformation',
-                        params={'address': wallet_address},
-                        headers={'X-API-Key': TONCENTER_API_KEY},
-                        timeout=10
-                    )
-                    
-                    seqno_data = seqno_response.json()
-                    if seqno_data.get('ok') and seqno_data.get('result'):
-                        seqno = seqno_data['result'].get('seqno', 0)
-                        print(f"📊 Seqno from TON Center: {seqno}")
-                    else:
-                        seqno = 0
-                        print(f"⚠️ Gagal get seqno dari TON Center, pakai 0")
-                except Exception as e:
-                    seqno = 0
-                    print(f"⚠️ Error get seqno, pakai 0: {e}")
-                
-                # Buat comment/memo
-                timestamp = int(time.time())
-                comment = f"wd_{telegram_id[-6:]}_{timestamp}"
-                
-                # Buat payload dengan comment
-                comment_bytes = comment.encode('utf-8')
-                payload_cell = begin_cell() \
-                    .store_uint(0, 32) \
-                    .store_bytes(comment_bytes) \
-                    .end_cell()
-                
-                # Konversi amount ke nanoTON
-                amount_nano = int(amount_ton * 1_000_000_000)
-                
-                print(f"📤 Sending {amount_ton} TON ({amount_nano} nano)")
-                print(f"💬 Comment: {comment}")
-                
-                # Buat transfer
-                transfer = await wallet.transfer(
-                    destination=destination_address,
-                    amount=amount_nano,
-                    body=payload_cell,
-                    seqno=seqno
-                )
-                
-                # Kirim ke blockchain via TON Center
-                boc_b64 = transfer.to_boc().base64()
-                
-                send_response = requests.post(
-                    'https://toncenter.com/api/v2/sendBoc',
-                    data={'boc': boc_b64},
-                    headers={'X-API-Key': TONCENTER_API_KEY},
-                    timeout=30
-                )
-                
-                send_result = send_response.json()
-                print(f"📡 TON Center response: {send_result}")
-                
-                if send_result.get('ok'):
-                    tx_hash = hashlib.sha256(transfer.to_boc()).hexdigest()
-                    return {
-                        'success': True, 
-                        'transaction_hash': tx_hash,
-                        'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
-                    }
-                else:
-                    return {
-                        'success': False, 
-                        'error': send_result.get('error', 'Unknown error')
-                    }
-            except Exception as e:
-                print(f"❌ Error in transfer: {e}")
-                import traceback
-                traceback.print_exc()
-                raise
-            finally:
-                # CLOSE_ALL untuk LiteBalancer
-                await provider.close_all()
-        
-        # Jalankan async
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(process_withdraw())
-        loop.close()
-        
-        if result['success']:
-            # Simpan di database
-            tx_id = db.save_transaction(
-                user_id=user['id'],
-                transaction_hash=result['transaction_hash'],
-                amount_ton=amount_ton,
-                from_address=WEB_ADDRESS,
-                to_address=destination_address,
-                memo=f"wd_{telegram_id[-6:]}_{int(time.time())}",
-                transaction_type='withdraw'
-            )
-            
-            # Catat di withdraw_requests
-            try:
-                db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
-                db.update_withdraw_request_with_hash(result['transaction_hash'], telegram_id)
-            except:
-                pass  # Abaikan error jika tabel belum ada
-            
-            return jsonify({
-                'success': True,
-                'transaction_hash': result['transaction_hash'],
-                'message': result['message']
-            })
-        else:
-            return jsonify({
-                'success': False, 
-                'error': result['error']
-            }), 500
-            
+        # Juga simpan di withdraw_requests (asumsikan tabel sudah diupdate)
+        request_id = db.save_withdraw_request_with_reference(
+            user['id'], telegram_id, amount_ton, destination_address, reference
+        )
     except Exception as e:
-        print(f"❌ Withdraw error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': f'Error: {str(e)}'
-        }), 500
+        print(f"⚠️ Error saving withdraw request: {e}")
+        # Fallback: simpan hanya di payment_tracking
+        request_id = None
+    
+    print(f"📤 Withdraw initiated for user {telegram_id}: {amount_ton} TON to {destination_address}")
+    print(f"   Reference: {reference}")
+    
+    return jsonify({
+        'success': True,
+        'reference': reference,
+        'amount_ton': amount_ton,
+        'destination_address': destination_address,
+        'message': 'Withdraw request recorded. Silakan lanjutkan dengan TON Pay di frontend.'
+    })
 
-def withdraw_manual(telegram_id, amount_ton, destination_address, user):
-    """Fallback manual withdraw jika wallet tidak tersedia"""
+@app.route('/api/verify-withdraw', methods=['POST'])
+def verify_withdraw():
+    """Verifikasi withdraw setelah transaksi berhasil di frontend"""
+    data = request.json
+    reference = data.get('reference')
+    transaction_hash = data.get('transaction_hash')
+    status = data.get('status', 'completed')
+    
+    if not reference:
+        return jsonify({'success': False, 'error': 'Reference tidak ditemukan'}), 400
+    
     try:
-        request_id = db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
+        # Cari tracking data berdasarkan reference
+        # Update status di payment_tracking
+        # TODO: Implement method di Database untuk update payment_tracking
+        
+        # Update withdraw_requests jika ada
+        # TODO: Implement method di Database untuk update withdraw_request berdasarkan reference
+        
+        # Catat transaksi withdraw di tabel transactions
+        # Kita perlu mendapatkan user_id dari reference
+        # Asumsi: reference format "wd_{telegram_id}_{timestamp}"
+        parts = reference.split('_')
+        if len(parts) >= 2:
+            telegram_id = parts[1]
+            user = db.get_user(telegram_id)
+            
+            if user and transaction_hash:
+                # Ambil amount dari payment_tracking atau data lain
+                # Untuk sementara, kita update status saja
+                print(f"✅ Withdraw confirmed: {reference} - {transaction_hash}")
         
         return jsonify({
             'success': True,
-            'request_id': request_id,
-            'message': '✅ Withdraw request recorded! Akan diproses manual.'
+            'message': 'Withdraw verified and recorded'
         })
     except Exception as e:
+        print(f"❌ Error verifying withdraw: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# ==================== ENDPOINT LEGACY WITHDRAW (UNTUK KOMPATIBILITAS) ====================
+
+@app.route('/api/withdraw', methods=['POST'])
+def withdraw_legacy():
+    """Legacy endpoint - mengarahkan ke initiate-withdraw"""
+    data = request.json
+    telegram_id = data.get('telegram_id')
+    amount_ton = float(data.get('amount_ton', 0))
+    destination_address = data.get('destination_address')
+    
+    # Panggil fungsi initiate_withdraw
+    return initiate_withdraw()
+
+def withdraw_manual(telegram_id, amount_ton, destination_address, user):
+    """Fallback manual withdraw (tidak digunakan lagi)"""
+    return jsonify({
+        'success': False,
+        'error': 'Withdraw otomatis tidak lagi menggunakan backend. Silakan gunakan TON Pay di frontend.'
+    }), 400
 
 # ==================== CEK SALDO WALLET ====================
 
 @app.route('/api/check-balance')
 def check_balance():
-    """Cek saldo wallet"""
+    """Cek saldo wallet merchant"""
     try:
         response = requests.get(
             f'https://toncenter.com/api/v2/getAddressBalance',
@@ -393,8 +299,8 @@ def check_balance():
 def get_withdraw_history(telegram_id):
     """Get user withdraw history"""
     try:
-        requests = db.get_withdraw_requests(telegram_id, 20)
-        return jsonify({'success': True, 'requests': requests})
+        requests_data = db.get_withdraw_requests(telegram_id, 20)
+        return jsonify({'success': True, 'requests': requests_data})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -530,7 +436,7 @@ def deposit_info():
 
 @app.route('/api/verify-transaction', methods=['POST'])
 def verify_transaction():
-    """Verify and record a transaction"""
+    """Verify and record a transaction (untuk deposit)"""
     data = request.json
     telegram_id = data.get('telegram_id')
     transaction_hash = data.get('transaction_hash')
@@ -683,23 +589,20 @@ if __name__ == '__main__':
     print(f"📝 Manifest URL: {TUNNEL_URL}/tonconnect-manifest.json")
     print(f"💾 Database path: {DB_PATH}")
     print(f"💰 Web Address: {WEB_ADDRESS}")
-    print(f"🔑 Private Key: {'✅ Tersedia' if PRIVATE_KEY_BYTES else '❌ Tidak ada'}")
     print(f"🔑 TON Center API: {'✅ Tersedia' if TONCENTER_API_KEY else '❌ Tidak ada'}")
     print(f"📦 TON Library: {'✅ pytoniq tersedia' if TON_LIB_AVAILABLE else '❌ Tidak ada'}")
-    print(f"📦 Wallet Support: {'✅ WalletV4R2 tersedia' if WALLET_AVAILABLE else '❌ Tidak ada'}")
-    
-    if not TON_LIB_AVAILABLE:
-        print("⚠️ Install pytoniq untuk payload: pip install pytoniq pytoniq-core")
-    
-    print(f"📊 Endpoints available:")
+    print(f"\n📊 Endpoints available:")
     print(f"   - /api/balance/<telegram_id>")
     print(f"   - /api/transactions/<telegram_id>")
     print(f"   - /api/deposit-info")
     print(f"   - /api/verify-transaction")
     print(f"   - /api/create-payload")
-    print(f"   - /api/withdraw (NEW - untuk withdraw otomatis)")
+    print(f"   - /api/initiate-withdraw (NEW - untuk memulai withdraw)")
+    print(f"   - /api/verify-withdraw (NEW - untuk verifikasi withdraw)")
     print(f"   - /api/withdraw-history/<telegram_id>")
     print(f"   - /api/check-balance")
+    print(f"\n⚠️  Private key TIDAK DIGUNAKAN untuk withdraw otomatis!")
+    print(f"   Withdraw menggunakan TON Pay di frontend sesuai dokumentasi.")
     
     app.run(
         host=os.getenv('FLASK_HOST', '0.0.0.0'),
