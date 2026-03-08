@@ -623,7 +623,7 @@ def process_withdraw():
     
     try:
         # Gunakan TON Center API untuk mengirim transaksi
-        # Dokumentasi: https://toncenter.com/api/v2/#/accounts/post_sendTransaction
+        # Dokumentasi yang benar: https://toncenter.com/api/v2/#/transactions/post_sendTransaction
         
         # Konversi amount ke nanoTON
         amount_nano = int(amount_ton * 1_000_000_000)
@@ -632,51 +632,75 @@ def process_withdraw():
         comment = f"wd:{telegram_id}:{reference}"
         
         # Siapkan payload untuk TON Center - format yang benar
-        # Address harus dalam format raw (0:...)
-        if destination_address.startswith('UQ') or destination_address.startswith('EQ'):
-            # Konversi dari user-friendly ke raw format
-            # Untuk sementara, kita asumsikan address sudah dalam format raw
-            pass
+        # Address harus dalam format raw (0:...) atau user-friendly
+        # TON Center menerima kedua format
         
-        payload = {
-            "address": WEB_ADDRESS,  # Alamat pengirim (merchant)
-            "to": destination_address,  # Alamat penerima (user)
-            "amount": amount_nano,  # Dalam nanoTON
-            "secret_key": PRIVATE_KEY,  # Private key dalam hex
-            "comment": comment,  # Optional comment
-            "send_mode": 3  # Mode kirim (default 3)
-        }
+        # Untuk mengirim transaksi, kita perlu membuat BOC (Bag of Cells)
+        # Tapi TON Center juga menyediakan endpoint untuk mengirim dengan private key
         
-        print(f"📤 Mengirim transaksi REAL ke TON Center...")
-        print(f"   From: {WEB_ADDRESS}")
-        print(f"   To: {destination_address}")
-        print(f"   Amount: {amount_ton} TON ({amount_nano} nano)")
-        print(f"   Comment: {comment}")
+        # ENDPOINT YANG BENAR: /api/v2/transactions/send (POST)
+        # Tapi sepertinya endpoint ini memerlukan BOC
         
-        # Kirim ke TON Center API
-        headers = {
-            'X-API-Key': TONCENTER_API_KEY,
-            'Content-Type': 'application/json'
-        }
+        # Alternatif: Gunakan endpoint /api/v2/wallet/send jika wallet di-host di TON Center
+        # Tapi kita tidak punya wallet di TON Center
         
-        # Log payload untuk debugging (tanpa secret key)
-        debug_payload = payload.copy()
-        debug_payload['secret_key'] = '***HIDDEN***'
-        print(f"   Payload: {json.dumps(debug_payload, indent=2)}")
+        print(f"📤 Mencoba metode alternatif...")
         
-        response = requests.post(
-            'https://toncenter.com/api/v2/transactions/send',
-            json=payload,
-            headers=headers,
-            timeout=30
-        )
-        
-        print(f"   Response status: {response.status_code}")
-        print(f"   Response text: {response.text[:200]}")  # Log first 200 chars
-        
-        # Cek response
-        if response.status_code == 200:
-            try:
+        # Metode 1: Menggunakan tonsdk untuk membuat BOC
+        try:
+            from tonsdk.contract.wallet import Wallets, WalletVersionEnum
+            from tonsdk.utils import to_nano
+            from tonsdk.boc import Cell
+            
+            print(f"📦 Menggunakan tonsdk untuk membuat transaksi...")
+            
+            # Buat wallet dari private key
+            wallet = Wallets.from_private_key(
+                private_key=PRIVATE_KEY,
+                version=WalletVersionEnum.v4r2,
+                workchain=0
+            )
+            
+            # Dapatkan address dari wallet
+            wallet_address = wallet[2]
+            print(f"   Wallet address: {wallet_address}")
+            
+            # Buat transfer
+            transfer_query = wallet[0].create_transfer(
+                to_addr=destination_address,
+                amount=to_nano(amount_ton, 'ton'),
+                payload=comment,
+                send_mode=3
+            )
+            
+            # Dapatkan BOC
+            boc = transfer_query['message'].to_boc(True).hex()
+            
+            print(f"   BOC created: {boc[:64]}...")
+            
+            # Kirim BOC ke TON Center
+            headers = {
+                'X-API-Key': TONCENTER_API_KEY,
+                'Content-Type': 'application/json'
+            }
+            
+            payload = {
+                'boc': boc
+            }
+            
+            print(f"📤 Mengirim BOC ke TON Center...")
+            
+            response = requests.post(
+                'https://toncenter.com/api/v2/sendBoc',
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+            
+            print(f"   Response status: {response.status_code}")
+            print(f"   Response text: {response.text[:200]}")
+            
+            if response.status_code == 200:
                 result = response.json()
                 if result.get('ok'):
                     transaction_hash = result.get('result')
@@ -712,19 +736,20 @@ def process_withdraw():
                         'success': False,
                         'error': f'Gagal mengirim transaksi: {error_msg}'
                     }), 500
-            except:
-                print(f"❌ Response bukan JSON: {response.text}")
+            else:
+                print(f"❌ HTTP Error {response.status_code}: {response.text}")
                 return jsonify({
                     'success': False,
-                    'error': f'Response error: {response.text[:200]}'
-                }), 500
-        else:
-            print(f"❌ HTTP Error {response.status_code}: {response.text}")
+                    'error': f'HTTP Error {response.status_code}: {response.text[:200]}'
+                }), response.status_code
+                
+        except ImportError:
+            print(f"⚠️ tonsdk tidak terinstall, install dengan: pip install tonsdk")
             return jsonify({
                 'success': False,
-                'error': f'HTTP Error {response.status_code}: {response.text[:200]}'
-            }), response.status_code
-        
+                'error': 'tonsdk library tidak tersedia di server'
+            }), 500
+            
     except Exception as e:
         print(f"❌ Error in withdraw real: {e}")
         import traceback
