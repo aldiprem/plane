@@ -153,13 +153,32 @@ async function processWithdraw() {
   }
 }
 
-// Helper function untuk encode comment ke Base64
 function base64EncodeComment(comment) {
-  const commentBytes = new TextEncoder().encode(comment);
-  // Prefix untuk text comment (4 byte 0)
-  const prefix = new Uint8Array([0, 0, 0, 0]);
-  const fullBytes = new Uint8Array([...prefix, ...commentBytes]);
-  return btoa(String.fromCharCode(...fullBytes));
+  try {
+    // Batasi panjang comment
+    if (comment.length > 120) {
+      comment = comment.substring(0, 120);
+    }
+
+    const encoder = new TextEncoder();
+    const commentBytes = encoder.encode(comment);
+
+    // Prefix untuk text comment (4 byte 0) - format standar TON
+    const prefix = new Uint8Array([0, 0, 0, 0]);
+    const fullBytes = new Uint8Array(prefix.length + commentBytes.length);
+    fullBytes.set(prefix);
+    fullBytes.set(commentBytes, prefix.length);
+
+    // Konversi ke Base64
+    let binary = '';
+    for (let i = 0; i < fullBytes.length; i++) {
+      binary += String.fromCharCode(fullBytes[i]);
+    }
+    return btoa(binary);
+  } catch (e) {
+    debugLog('Error encoding comment:', e);
+    return undefined; // Kirim tanpa payload jika error
+  }
 }
 
 function showWithdrawStatus(message, type = 'info') {
@@ -448,144 +467,94 @@ function closeModal() {
     document.getElementById('deposit-modal').style.display = 'none';
 }
 
-/**
- * IMPLEMENTASI SESUAI DOKUMENTASI TON PAY
- * https://docs.ton.org/ecosystem/ton-pay/payment-integration/transfer
- */
 async function processDeposit() {
-    // Validasi koneksi wallet
-    if (!tonConnectUI?.connected) {
-        await tonConnectUI.connect();
-        return;
+  // Validasi koneksi wallet
+  if (!tonConnectUI?.connected) {
+    await tonConnectUI.connect();
+    return;
+  }
+
+  const amount = parseFloat(document.getElementById('deposit-amount').value);
+
+  if (amount < CONFIG.MIN_DEPOSIT) {
+    showError(`Minimum deposit is ${CONFIG.MIN_DEPOSIT} TON`);
+    return;
+  }
+
+  try {
+    const sendBtn = document.getElementById('send-deposit-btn');
+    sendBtn.disabled = true;
+    sendBtn.innerHTML = '<span>⏳</span> Processing...';
+
+    const senderAddress = tonConnectUI.account?.address;
+
+    debugLog('📤 Processing deposit:', { amount, senderAddress });
+
+    // Buat memo
+    const memo = `deposit:${telegramUser?.id}:${Date.now()}`;
+
+    // Konversi ke nanoTON (1 TON = 1,000,000,000 nanoTON)
+    // Pastikan dalam bentuk string dan tidak ada floating point error
+    const amountNano = Math.floor(amount * 1_000_000_000).toString();
+
+    debugLog('💰 Amount in nanoTON:', amountNano);
+
+    // Buat transaction manual
+    const transaction = {
+      validUntil: Math.floor(Date.now() / 1000) + 600, // 10 menit
+      messages: [
+        {
+          address: CONFIG.WEB_ADDRESS,
+          amount: amountNano, // String, dalam nanoTON
+          // Optional: tambahkan comment dengan format yang benar
+          payload: base64EncodeComment(memo)
+                }
+            ]
+    };
+
+    debugLog('📤 Sending transaction:', JSON.stringify(transaction, null, 2));
+
+    // Kirim transaksi
+    const result = await tonConnectUI.sendTransaction(transaction);
+    debugLog('✅ Transaction sent:', result);
+
+    // Record transaction di database
+    const verifyResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/verify-transaction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        telegram_id: telegramUser?.id.toString(),
+        transaction_hash: result.boc,
+        amount_ton: amount,
+        from_address: senderAddress,
+        memo: memo
+      })
+    });
+
+    const verifyData = await verifyResponse.json();
+    debugLog('✅ Transaction verified:', verifyData);
+
+    // Tampilkan sukses
+    showTransactionSuccess(result.boc, `deposit_${Date.now()}`);
+
+  } catch (error) {
+    debugLog('❌ Payment failed:', {
+      message: error.message,
+      name: error.name
+    });
+
+    if (error.message?.includes("rejected")) {
+      showError('Transaction cancelled by user');
+    } else {
+      showError('Payment failed: ' + error.message);
     }
-
-    const amount = parseFloat(document.getElementById('deposit-amount').value);
-
-    if (amount < CONFIG.MIN_DEPOSIT) {
-        showError(`Minimum deposit is ${CONFIG.MIN_DEPOSIT} TON`);
-        return;
+  } finally {
+    const sendBtn = document.getElementById('send-deposit-btn');
+    if (sendBtn) {
+      sendBtn.disabled = false;
+      sendBtn.innerHTML = '<span>💸</span> Send from Wallet';
     }
-
-    try {
-        const sendBtn = document.getElementById('send-deposit-btn');
-        sendBtn.disabled = true;
-        sendBtn.innerHTML = '<span>⏳</span> Processing...';
-
-        // Get sender address dari wallet yang terhubung
-        const senderAddress = tonConnectUI.account?.address;
-        
-        debugLog('📤 Membuat transfer dengan TON Pay...', { amount, senderAddress });
-
-        /**
-         * SESUAI DOKUMENTASI:
-         * createTonPayTransfer(
-         *   {
-         *     amount: number,
-         *     asset: "TON" | "USDT" | address,
-         *     recipientAddr?: string,
-         *     senderAddr: string,
-         *     commentToSender?: string,
-         *     commentToRecipient?: string,
-         *   },
-         *   {
-         *     chain: "mainnet" | "testnet",
-         *     apiKey?: string
-         *   }
-         * )
-         */
-        
-        // Pastikan tonPay tersedia
-        if (!tonPay || !tonPay.createTonPayTransfer) {
-            // Fallback ke metode manual jika TON Pay tidak tersedia
-            debugLog('⚠️ TON Pay tidak tersedia, menggunakan metode manual');
-            await processDepositManual(amount, senderAddress);
-            return;
-        }
-
-        const { message, reference, bodyBase64Hash } = await tonPay.createTonPayTransfer(
-            {
-                amount: amount,
-                asset: "TON",
-                recipientAddr: CONFIG.WEB_ADDRESS,
-                senderAddr: senderAddress,
-                commentToSender: `Deposit ke Marketplace`,
-                commentToRecipient: `Deposit dari user ${telegramUser?.id}`,
-            },
-            {
-                chain: CONFIG.NETWORK,
-            }
-        );
-
-        debugLog('✅ TON Pay transfer created:', { 
-            message, 
-            reference, 
-            bodyBase64Hash 
-        });
-
-        // Simpan tracking data ke server (WAJIB - sesuai dokumentasi)
-        await fetch(`${CONFIG.TUNNEL_URL}/api/store-payment-tracking`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                reference,
-                bodyBase64Hash,
-                telegram_id: telegramUser?.id.toString(),
-                amount
-            })
-        });
-
-        // Kirim transaksi dengan message dari TON Pay
-        const transaction = {
-            validUntil: Math.floor(Date.now() / 1000) + 600,
-            messages: [message]
-        };
-
-        debugLog('📤 Sending transaction:', transaction);
-
-        const result = await tonConnectUI.sendTransaction(transaction);
-        debugLog('✅ Transaction sent:', result);
-
-        // Record transaction di database
-        await fetch(`${CONFIG.TUNNEL_URL}/api/verify-transaction`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                telegram_id: telegramUser?.id.toString(),
-                transaction_hash: result.boc,
-                amount_ton: amount,
-                from_address: senderAddress,
-                reference: reference
-            })
-        });
-
-        // Tampilkan sukses
-        showTransactionSuccess(result.boc, reference);
-
-        // Link ke explorer
-        const explorerUrl = CONFIG.NETWORK === 'mainnet' 
-            ? `https://mainnet.tonscan.org/tx/${result.boc}`
-            : `https://tonscan.org/tx/${result.boc}`;
-        
-        debugLog('🔍 View on explorer:', explorerUrl);
-
-    } catch (error) {
-        debugLog('❌ Payment failed:', {
-            message: error.message,
-            name: error.name
-        });
-        
-        if (error.message?.includes("rejected")) {
-            showError('Transaction cancelled by user');
-        } else {
-            showError('Payment failed: ' + error.message);
-        }
-    } finally {
-        const sendBtn = document.getElementById('send-deposit-btn');
-        if (sendBtn) {
-            sendBtn.disabled = false;
-            sendBtn.innerHTML = '<span>💸</span> Send from Wallet';
-        }
-    }
+  }
 }
 
 /**
