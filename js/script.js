@@ -39,6 +39,190 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 });
 
+// ==================== WITHDRAW FUNCTIONS ====================
+
+async function processWithdraw() {
+  // Validasi koneksi wallet
+  if (!tonConnectUI?.connected) {
+    showWithdrawStatus('⚠️ Please connect your wallet first to receive funds', 'warning');
+    await tonConnectUI.connect();
+    return;
+  }
+
+  // Validasi login Telegram
+  if (!telegramUser) {
+    showWithdrawStatus('⚠️ Please open in Telegram Web App', 'warning');
+    return;
+  }
+
+  const amount = parseFloat(document.getElementById('withdraw-amount').value);
+  const maxWithdraw = parseFloat(document.getElementById('max-withdraw').textContent);
+
+  // Validasi amount
+  if (isNaN(amount) || amount < 0.1) {
+    showWithdrawStatus('❌ Minimum withdraw is 0.1 TON', 'error');
+    return;
+  }
+
+  if (amount > maxWithdraw) {
+    showWithdrawStatus(`❌ Maximum withdraw is ${maxWithdraw} TON`, 'error');
+    return;
+  }
+
+  // Konfirmasi user
+  if (!confirm(`Are you sure you want to withdraw ${amount} TON?\n\nThis will be sent to:\n${formatAddress(tonConnectUI.account?.address)}`)) {
+    return;
+  }
+
+  const withdrawBtn = document.getElementById('withdraw-btn');
+  const originalText = withdrawBtn.innerHTML;
+  withdrawBtn.disabled = true;
+  withdrawBtn.innerHTML = '<span>⏳</span> Processing Withdrawal...';
+
+  try {
+    const destinationAddress = tonConnectUI.account?.address;
+
+    if (!destinationAddress) {
+      throw new Error('Wallet address not found');
+    }
+
+    debugLog('📤 Processing W5 withdrawal:', {
+      amount,
+      destination: destinationAddress
+    });
+
+    // Panggil endpoint W5
+    const response = await fetch(`${CONFIG.TUNNEL_URL}/api/withdraw-w5`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        telegram_id: telegramUser.id.toString(),
+        amount_ton: amount,
+        destination_address: destinationAddress
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.success) {
+      showWithdrawStatus(
+        `✅ Withdrawal successful! ${amount} TON sent.\n\nTransaction: ${data.transaction_hash.slice(0, 10)}...`,
+        'success'
+      );
+
+      document.getElementById('withdraw-amount').value = '1.0';
+
+      setTimeout(() => {
+        loadUserBalance();
+        loadTransactionHistory();
+        loadWithdrawHistory();
+      }, 3000);
+
+    } else {
+      throw new Error(data.error || 'Withdrawal failed');
+    }
+
+  } catch (error) {
+    debugLog('❌ Withdraw error:', error);
+    showWithdrawStatus(`❌ ${error.message}`, 'error');
+  } finally {
+    withdrawBtn.disabled = false;
+    withdrawBtn.innerHTML = originalText;
+  }
+}
+
+// Fungsi lainnya tetap sama...
+function showWithdrawStatus(message, type = 'info') {
+  const statusEl = document.getElementById('withdraw-status');
+  if (statusEl) {
+    statusEl.className = `status-message ${type}`;
+    statusEl.textContent = message;
+    statusEl.classList.remove('hidden');
+
+    if (type === 'success') {
+      setTimeout(() => {
+        statusEl.classList.add('hidden');
+      }, 5000);
+    }
+  }
+}
+
+function updateMaxWithdraw() {
+  const balanceElement = document.getElementById('user-balance');
+  const maxWithdrawElement = document.getElementById('max-withdraw');
+  const withdrawAmount = document.getElementById('withdraw-amount');
+  const withdrawBtn = document.getElementById('withdraw-btn');
+  const withdrawWarning = document.getElementById('withdraw-warning');
+
+  if (balanceElement && maxWithdrawElement) {
+    const balance = parseFloat(balanceElement.textContent) || 0;
+    maxWithdrawElement.textContent = balance.toFixed(2);
+
+    if (tonConnectUI?.connected) {
+      withdrawWarning.classList.add('hidden');
+      withdrawBtn.disabled = false;
+
+      if (withdrawAmount) {
+        const amount = parseFloat(withdrawAmount.value) || 0;
+        withdrawAmount.style.borderColor = amount > balance ? 'var(--danger-color)' : '';
+      }
+    } else {
+      withdrawWarning.classList.remove('hidden');
+      withdrawBtn.disabled = true;
+    }
+  }
+}
+
+// ==================== WITHDRAW HISTORY ====================
+async function loadWithdrawHistory() {
+  if (!telegramUser) return;
+
+  try {
+    const response = await fetch(`${CONFIG.TUNNEL_URL}/api/withdraw-history/${telegramUser.id}`);
+    const data = await response.json();
+
+    if (data.success) {
+      displayWithdrawHistory(data.requests);
+    }
+  } catch (error) {
+    debugLog('❌ Error loading withdraw history:', error);
+  }
+}
+
+function displayWithdrawHistory(requests) {
+  const container = document.getElementById('withdraw-history');
+  if (!container) return;
+
+  if (!requests?.length) {
+    container.innerHTML = '<div class="loading-spinner">No withdraw requests yet</div>';
+    return;
+  }
+
+  let html = '<ul class="transactions-list">';
+  requests.forEach(req => {
+    const date = new Date(req.created_at).toLocaleDateString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    html += `
+            <li class="transaction-item confirmed">
+                <div>
+                    <div class="tx-date">${date}</div>
+                    <div class="tx-amount">-${req.amount_ton} TON</div>
+                    <small class="tx-address">To: ${formatAddress(req.destination_address)}</small>
+                </div>
+                <div class="tx-status confirmed">Completed</div>
+            </li>
+        `;
+  });
+  html += '</ul>';
+
+  container.innerHTML = html;
+}
+
 // ==================== TELEGRAM FUNCTIONS ====================
 function initTelegram() {
     try {
