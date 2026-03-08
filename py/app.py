@@ -622,21 +622,24 @@ def process_withdraw():
         return jsonify({'success': False, 'error': 'Private key tidak tersedia di server'}), 500
     
     try:
-        # Import dari tonutils
-        from tonutils.client import ToncenterClient
+        # Import dari tonutils - CARA YANG BENAR
+        from tonutils.client import TonapiClient
         from tonutils.wallet import WalletV4R2
-        from tonsdk.utils import to_nano
+        from tonutils.utils import to_nano
         
         print(f"📤 Memproses withdraw dengan tonutils...")
         
-        # Inisialisasi client TON Center
-        client = ToncenterClient(
-            api_key=TONCENTER_API_KEY,
+        # API Key untuk Tonapi (bisa dari toncenter atau tonapi.io)
+        # Untuk Tonapi (https://tonapi.io) - daftar dapat API key gratis
+        TONAPI_KEY = os.getenv('TONAPI_KEY', '')  # Tambahkan di .env
+        
+        # Inisialisasi client Tonapi
+        client = TonapiClient(
+            api_key=TONAPI_KEY if TONAPI_KEY else TONCENTER_API_KEY,
             is_testnet=(NETWORK == 'testnet')
         )
         
         # Buat wallet dari private key
-        # Private key dalam format hex, tonutils akan handle konversi
         wallet = WalletV4R2.from_private_key(
             client=client,
             private_key=PRIVATE_KEY  # Langsung pakai string hex
@@ -645,13 +648,12 @@ def process_withdraw():
         # Buat comment
         comment = f"wd:{telegram_id}:{reference}"
         
-        # Kirim transaksi
-        # to_nano mengkonversi TON ke nanoTON
+        # Kirim transaksi (SYNC - tonutils handle async internally)
         tx_hash = wallet.transfer(
             destination=destination_address,
-            amount=to_nano(amount_ton, 'ton'),
+            amount=to_nano(amount_ton),  # to_nano tanpa parameter 'ton'
             body=comment,
-            send_mode=3  # Mode default untuk transfer
+            send_mode=3
         )
         
         print(f"✅ Transaksi berhasil dikirim: {tx_hash}")
@@ -682,9 +684,16 @@ def process_withdraw():
         
     except ImportError as e:
         print(f"❌ Import error: {e}")
+        # Coba import dengan cara alternatif
+        try:
+            from tonutils.client import TonapiClient
+            print("✅ TonapiClient tersedia")
+        except:
+            print("❌ TonapiClient tidak tersedia")
+            
         return jsonify({
             'success': False,
-            'error': 'Library TON tidak lengkap. Jalankan: pip install tonutils aiofiles'
+            'error': 'Library tonutils tidak lengkap. Periksa instalasi.'
         }), 500
         
     except Exception as e:
