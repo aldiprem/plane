@@ -99,78 +99,36 @@ async function processWithdraw() {
 
     debugLog('✅ Withdraw initiated:', initData);
 
-    // 2. BUAT TRANSFER DARI MERCHANT KE USER
-    // Format amount ke nano
-    const amountNano = (amount * 1_000_000_000).toString();
+    // 2. MINTA BACKEND MEMPROSES WITHDRAW (menggunakan private key)
+    showWithdrawStatus('⏳ Processing withdrawal on server...', 'info');
 
-    // Buat transaction message
-    const transaction = {
-      validUntil: Math.floor(Date.now() / 1000) + 600, // 10 menit
-      messages: [
-        {
-          address: destinationAddress, // Alamat tujuan (user)
-          amount: amountNano, // Amount dalam nanoTON
-          // Optional: Tambahkan comment
-          payload: base64EncodeComment(`Withdrawal for user ${telegramUser.id}`)
-        }
-      ]
-    };
-
-    debugLog('📤 Sending transaction from MERCHANT wallet:', transaction);
-
-    // 3. INI PENTING: Kita perlu wallet MERCHANT yang menandatangani, bukan wallet user
-    // TAPI karena merchant wallet tidak terhubung di frontend, kita perlu solusi lain
-
-    // SOLUSI 1: Buat endpoint di backend untuk menandatangani transaksi
-    // Tapi ini tidak aman karena private key ada di server
-
-    // SOLUSI 2: Gunakan TON Pay dengan cara yang benar - merchant harus connect wallet-nya
-    // Untuk testing, Anda bisa connect wallet merchant di browser yang sama
-
-    // Untuk sementara, kita akan gunakan TON Pay API dengan asumsi 
-    // Anda sudah connect wallet merchant di frontend
-
-    // Cek apakah wallet yang terhubung adalah merchant wallet
-    const connectedAddress = tonConnectUI.account?.address;
-    const merchantAddress = CONFIG.WEB_ADDRESS;
-
-    // Konversi address format
-    const normalizedConnected = connectedAddress?.replace('0:', '')?.toLowerCase();
-    const normalizedMerchant = merchantAddress?.replace('UQ', '')?.replace('0:', '')?.toLowerCase();
-
-    if (normalizedConnected !== normalizedMerchant) {
-      showWithdrawStatus('⚠️ Please connect MERCHANT wallet to process withdrawal', 'warning');
-
-      // Tampilkan dialog untuk connect merchant wallet
-      if (confirm('You need to connect the merchant wallet to process withdrawal. Connect now?')) {
-        await tonConnectUI.disconnect();
-        setTimeout(() => tonConnectUI.connect(), 500);
-      }
-      return;
-    }
-
-    // Kirim transaksi dari merchant wallet
-    const result = await tonConnectUI.sendTransaction(transaction);
-    debugLog('✅ Transaction sent from merchant:', result);
-
-    // 4. Verifikasi di backend
-    const verifyResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/verify-withdraw`, {
+    const processResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/process-withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        reference: initData.reference,
-        transaction_hash: result.boc,
-        status: 'completed'
+        telegram_id: telegramUser.id.toString(),
+        amount_ton: amount,
+        destination_address: destinationAddress,
+        reference: initData.reference
       })
     });
 
-    const verifyData = await verifyResponse.json();
-    debugLog('✅ Withdraw verified:', verifyData);
+    const processData = await processResponse.json();
 
+    if (!processData.success) {
+      throw new Error(processData.error || 'Failed to process withdraw');
+    }
+
+    debugLog('✅ Withdraw processed by server:', processData);
+
+    // 3. Tampilkan sukses
     showWithdrawStatus(
-      `✅ Withdrawal successful! ${amount} TON sent to your wallet.`,
+      `✅ Withdrawal successful! ${amount} TON sent to your wallet.\nTransaction: ${processData.transaction_hash.slice(0, 10)}...`,
       'success'
     );
+
+    // Reset form
+    document.getElementById('withdraw-amount').value = '1.0';
 
     // Refresh data
     setTimeout(() => {
@@ -204,7 +162,6 @@ function base64EncodeComment(comment) {
   return btoa(String.fromCharCode(...fullBytes));
 }
 
-// Fungsi lainnya tetap sama...
 function showWithdrawStatus(message, type = 'info') {
   const statusEl = document.getElementById('withdraw-status');
   if (statusEl) {
@@ -212,7 +169,7 @@ function showWithdrawStatus(message, type = 'info') {
     statusEl.textContent = message;
     statusEl.classList.remove('hidden');
 
-    if (type === 'success') {
+    if (type === 'success' || type === 'error') {
       setTimeout(() => {
         statusEl.classList.add('hidden');
       }, 5000);
