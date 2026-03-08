@@ -21,6 +21,8 @@ from db.app import Database
 # Load environment variables
 load_dotenv()
 
+NETWORK = os.getenv('NETWORK', 'mainnet')
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
@@ -626,8 +628,6 @@ def process_withdraw_backend():
         
         from pytoniq import WalletV4, LiteClient, LiteBalancer
         
-        # Inisialisasi client ke jaringan TON
-        # Gunakan variabel NETWORK yang sudah didefinisikan
         is_testnet = NETWORK == 'testnet'
         
         if is_testnet:
@@ -670,7 +670,7 @@ def process_withdraw_backend():
         tx_id = db.save_transaction(
             user_id=user['id'],
             transaction_hash=tx_hash,
-            amount_ton=-amount_ton,  # Negative untuk withdraw
+            amount_ton=-amount_ton,
             from_address=WEB_ADDRESS,
             to_address=destination_address,
             memo=f"withdraw:{reference}",
