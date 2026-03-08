@@ -42,9 +42,6 @@ class Database:
                 )
             ''')
 
-            # DROP tabel transactions yang lama (jika ada) dan buat ulang
-            conn.execute('DROP TABLE IF EXISTS transactions')
-            
             conn.execute('''
                 CREATE TABLE transactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
