@@ -585,6 +585,47 @@ def store_payment_tracking():
         data.get('amount')
     )
     return jsonify({'success': True})
+@app.route('/api/process-withdraw', methods=['POST'])
+def process_withdraw_backend():
+    """Proses withdraw dari backend (aman dengan private key)"""
+    data = request.json
+    telegram_id = data.get('telegram_id')
+    amount_ton = float(data.get('amount_ton', 0))
+    destination_address = data.get('destination_address')
+    reference = data.get('reference')
+    
+    # Validasi
+    user = db.get_user(telegram_id)
+    if not user:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+    
+    # Cek saldo
+    balance = db.get_user_balance(telegram_id)
+    if balance < amount_ton:
+        return jsonify({'success': False, 'error': 'Insufficient balance'}), 400
+    
+    # Proses transfer menggunakan private key (pytoniq)
+    try:
+        # Gunakan pytoniq untuk membuat dan mengirim transaksi
+        # ...
+        
+        # Kurangi saldo user
+        db.save_transaction(
+            user_id=user['id'],
+            transaction_hash=tx_hash,
+            amount_ton=-amount_ton,
+            from_address=WEB_ADDRESS,
+            to_address=destination_address,
+            memo=f"withdraw:{reference}",
+            transaction_type='withdraw'
+        )
+        
+        return jsonify({
+            'success': True,
+            'transaction_hash': tx_hash
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ==================== MAIN ====================
