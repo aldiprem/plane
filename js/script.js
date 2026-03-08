@@ -2,7 +2,6 @@
 const CONFIG = {
     // Ganti dengan URL tunnel Anda
     TUNNEL_URL: 'https://sydney-recommendation-looked-perceived.trycloudflare.com',
-    // Ganti dengan address wallet Anda untuk menerima pembayaran
     WEB_ADDRESS: '0QA9s4GFIMuO7qEF110duSQheIaGtr0T_HHjppW7cRiqiUqX',
     NETWORK: 'mainnet',
     MIN_DEPOSIT: 0.1,
@@ -86,13 +85,13 @@ async function processWithdraw() {
       throw new Error('Wallet address not found');
     }
 
-    debugLog('📤 Processing W5 withdrawal:', {
+    debugLog('📤 Processing withdrawal:', {
       amount,
       destination: destinationAddress
     });
 
-    // Panggil endpoint W5
-    const response = await fetch(`${CONFIG.TUNNEL_URL}/api/withdraw-w5`, {
+    // Panggil endpoint withdraw (bukan withdraw-w5)
+    const response = await fetch(`${CONFIG.TUNNEL_URL}/api/withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -102,90 +101,65 @@ async function processWithdraw() {
       })
     });
 
-    // Parse response JSON
-    let data;
-    try {
-      data = await response.json();
-    } catch (e) {
-      throw new Error('Invalid response from server');
-    }
+    const data = await response.json();
 
-    // Handle response
     if (data.success) {
-      // Validasi dan format transaction hash
       const txHash = data.transaction_hash || '';
       const shortHash = txHash.length > 10 ? txHash.slice(0, 10) + '...' : txHash;
 
-      // Tampilkan pesan sukses
-      const successMessage = data.message || `✅ Withdrawal successful! ${amount} TON sent.`;
       showWithdrawStatus(
-        `${successMessage}\n\nTransaction: ${shortHash}`,
+        `✅ Withdrawal successful! ${amount} TON sent.\n\nTransaction: ${shortHash}`,
         'success'
       );
 
-      // Reset form
       document.getElementById('withdraw-amount').value = '1.0';
 
-      // Refresh data setelah 3 detik
       setTimeout(() => {
         loadUserBalance();
         loadTransactionHistory();
-        if (typeof loadWithdrawHistory === 'function') {
-          loadWithdrawHistory();
-        }
+        loadWithdrawHistory();
       }, 3000);
 
     } else {
-      // Tampilkan error dari server
-      const errorMsg = data.error || 'Withdrawal failed';
-      throw new Error(errorMsg);
+      throw new Error(data.error || 'Withdrawal failed');
     }
 
   } catch (error) {
     debugLog('❌ Withdraw error:', error);
 
-    // Tampilkan error ke user
     let errorMessage = error.message;
-
-    // Handle specific error cases
     if (error.message.includes('Insufficient balance')) {
       errorMessage = 'Saldo tidak mencukupi untuk melakukan withdraw';
     } else if (error.message.includes('Network Error')) {
       errorMessage = 'Gagal terhubung ke server. Periksa koneksi Anda';
     } else if (error.message.includes('500')) {
       errorMessage = 'Server error. Silakan coba lagi nanti';
-    } else if (error.message.includes('timeout')) {
-      errorMessage = 'Request timeout. Silakan coba lagi';
     }
 
     showWithdrawStatus(`❌ ${errorMessage}`, 'error');
 
   } finally {
-    // Enable button kembali
     withdrawBtn.disabled = false;
     withdrawBtn.innerHTML = originalText;
   }
 }
 
-// Fungsi pendukung untuk showWithdrawStatus
+// Fungsi lainnya tetap sama...
 function showWithdrawStatus(message, type = 'info') {
   const statusEl = document.getElementById('withdraw-status');
-  if (!statusEl) return;
+  if (statusEl) {
+    statusEl.className = `status-message ${type}`;
+    statusEl.textContent = message;
+    statusEl.classList.remove('hidden');
 
-  // Set class dan message
-  statusEl.className = `status-message ${type}`;
-  statusEl.textContent = message;
-  statusEl.classList.remove('hidden');
-
-  // Auto-hide untuk success messages setelah 5 detik
-  if (type === 'success') {
-    setTimeout(() => {
-      statusEl.classList.add('hidden');
-    }, 5000);
+    if (type === 'success') {
+      setTimeout(() => {
+        statusEl.classList.add('hidden');
+      }, 5000);
+    }
   }
 }
 
-// Fungsi updateMaxWithdraw yang sudah diperbaiki
 function updateMaxWithdraw() {
   const balanceElement = document.getElementById('user-balance');
   const maxWithdrawElement = document.getElementById('max-withdraw');
@@ -194,29 +168,16 @@ function updateMaxWithdraw() {
   const withdrawWarning = document.getElementById('withdraw-warning');
 
   if (balanceElement && maxWithdrawElement) {
-    // Ambil balance dari element (format: "X.XX TON")
-    const balanceText = balanceElement.textContent || '0 TON';
-    const balance = parseFloat(balanceText) || 0;
+    const balance = parseFloat(balanceElement.textContent) || 0;
+    maxWithdrawElement.textContent = balance.toFixed(2);
 
-    // Max withdraw adalah balance atau 10000, mana yang lebih kecil
-    const maxAllowed = Math.min(balance, 10000);
-    maxWithdrawElement.textContent = maxAllowed.toFixed(2);
-
-    // Update UI berdasarkan status wallet
     if (tonConnectUI?.connected) {
       withdrawWarning.classList.add('hidden');
       withdrawBtn.disabled = false;
 
       if (withdrawAmount) {
         const amount = parseFloat(withdrawAmount.value) || 0;
-        // Validasi amount real-time
-        if (amount > maxAllowed) {
-          withdrawAmount.style.borderColor = 'var(--danger-color)';
-          withdrawAmount.setAttribute('data-invalid', 'true');
-        } else {
-          withdrawAmount.style.borderColor = '';
-          withdrawAmount.removeAttribute('data-invalid');
-        }
+        withdrawAmount.style.borderColor = amount > balance ? 'var(--danger-color)' : '';
       }
     } else {
       withdrawWarning.classList.remove('hidden');
@@ -225,7 +186,7 @@ function updateMaxWithdraw() {
   }
 }
 
-// Load withdraw history
+// ==================== WITHDRAW HISTORY ====================
 async function loadWithdrawHistory() {
   if (!telegramUser) return;
 
@@ -241,7 +202,6 @@ async function loadWithdrawHistory() {
   }
 }
 
-// Display withdraw history
 function displayWithdrawHistory(requests) {
   const container = document.getElementById('withdraw-history');
   if (!container) return;
@@ -260,32 +220,21 @@ function displayWithdrawHistory(requests) {
       minute: '2-digit'
     });
 
-    let statusClass = req.status === 'completed' ? 'confirmed' : 'pending';
-    let statusText = req.status === 'completed' ? 'Completed' : 'Pending';
-
     html += `
-      <li class="transaction-item ${statusClass}">
-        <div>
-          <div class="tx-date">${date}</div>
-          <div class="tx-amount">-${req.amount_ton} TON</div>
-          <small class="tx-address">To: ${formatAddress(req.destination_address)}</small>
-        </div>
-        <div class="tx-status ${statusClass}">${statusText}</div>
-      </li>
-    `;
+            <li class="transaction-item confirmed">
+                <div>
+                    <div class="tx-date">${date}</div>
+                    <div class="tx-amount">-${req.amount_ton} TON</div>
+                    <small class="tx-address">To: ${formatAddress(req.destination_address)}</small>
+                </div>
+                <div class="tx-status confirmed">Completed</div>
+            </li>
+        `;
   });
   html += '</ul>';
 
   container.innerHTML = html;
 }
-
-// Event listener untuk input withdraw amount
-document.addEventListener('DOMContentLoaded', () => {
-  const withdrawAmount = document.getElementById('withdraw-amount');
-  if (withdrawAmount) {
-    withdrawAmount.addEventListener('input', updateMaxWithdraw);
-  }
-});
 
 // ==================== TELEGRAM FUNCTIONS ====================
 function initTelegram() {
