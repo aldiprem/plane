@@ -541,7 +541,7 @@ def verify_transaction():
     if not user:
         return jsonify({'success': False, 'error': 'User not found'}), 404
     
-    # Save transaction
+    # Langsung simpan sebagai confirmed karena transaksi sudah berhasil di blockchain
     tx_id = db.save_transaction(
         user_id=user['id'],
         transaction_hash=transaction_hash,
@@ -553,10 +553,13 @@ def verify_transaction():
     )
     
     if tx_id:
+        # Auto confirm karena transaksi sudah berhasil
+        db.confirm_transaction(transaction_hash)
+        
         return jsonify({
             'success': True,
             'transaction_id': tx_id,
-            'message': 'Transaction recorded, waiting for confirmation'
+            'message': 'Transaction recorded and confirmed!'
         })
     else:
         return jsonify({
