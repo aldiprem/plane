@@ -251,3 +251,25 @@ class Database:
                 WHERE id = ?
             ''', (status, transaction_hash, request_id))
             conn.commit()
+            
+    # Tambahkan method ini di class Database
+    
+    def save_payment_tracking(self, reference, body_base64_hash, telegram_id, amount):
+        """Save payment tracking data"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                INSERT OR IGNORE INTO payment_tracking (reference, body_base64_hash, telegram_id, amount)
+                VALUES (?, ?, ?, ?)
+            ''', (reference, body_base64_hash, telegram_id, amount))
+            conn.commit()
+    
+    def update_withdraw_request_with_hash(self, transaction_hash, telegram_id):
+        """Update withdraw request with transaction hash"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                UPDATE withdraw_requests 
+                SET transaction_hash = ?, status = 'completed', processed_at = CURRENT_TIMESTAMP
+                WHERE telegram_id = ? AND status = 'pending'
+                ORDER BY created_at DESC LIMIT 1
+            ''', (transaction_hash, telegram_id))
+            conn.commit()
