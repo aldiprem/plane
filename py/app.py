@@ -50,23 +50,21 @@ try:
     from pytoniq_core import Cell
     TON_LIB_AVAILABLE = True
     
-    # Cek ketersediaan wallet V5 - sesuaikan dengan output dir(pytoniq)
-    W5_AVAILABLE = False
+    # Cek ketersediaan wallet V4R2 (yang tersedia)
+    WALLET_AVAILABLE = False
     try:
-        # Dari output dir(pytoniq) terlihat ada WalletV5R1 dan WalletV5R2
-        from pytoniq import WalletV5R1, WalletV5R2
-        W5_AVAILABLE = True
-        print("✅ WalletV5R1/R2 tersedia")
+        from pytoniq import WalletV4R2
+        WALLET_AVAILABLE = True
+        print("✅ WalletV4R2 tersedia - akan digunakan untuk withdraw")
     except ImportError as e:
-        print(f"⚠️ WalletV5 tidak tersedia: {e}")
+        print(f"⚠️ WalletV4R2 tidak tersedia: {e}")
     
     print("✅ pytoniq library tersedia")
 except ImportError as e:
     TON_LIB_AVAILABLE = False
-    W5_AVAILABLE = False
+    WALLET_AVAILABLE = False
     print(f"⚠️ pytoniq tidak terinstall: {e}")
-    
-    
+
 # ==================== ENDPOINT UNTUK MEMBUAT PAYLOAD ====================
 
 @app.route('/api/create-payload', methods=['POST'])
@@ -154,10 +152,10 @@ def create_payload():
         'memo_plain': memo_plain
     })
 
-# ==================== ENDPOINT WITHDRAW UNTUK W5 ====================
-@app.route('/api/withdraw-w5', methods=['POST'])
-def withdraw_w5():
-    """Withdraw otomatis untuk wallet W5"""
+# ==================== ENDPOINT WITHDRAW UNTUK WALLET V4R2 ====================
+@app.route('/api/withdraw', methods=['POST'])
+def withdraw():
+    """Withdraw otomatis untuk wallet V4R2"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
@@ -190,36 +188,26 @@ def withdraw_w5():
     if not PRIVATE_KEY_BYTES:
         return jsonify({'success': False, 'error': 'Private Key tidak dikonfigurasi'}), 500
     
-    # Jika W5 tidak tersedia, langsung return error
-    if not W5_AVAILABLE:
-        return jsonify({
-            'success': False, 
-            'error': 'Wallet W5 tidak tersedia di server. Hubungi admin.'
-        }), 500
+    # Jika wallet tidak tersedia, fallback ke manual
+    if not WALLET_AVAILABLE:
+        return withdraw_manual(telegram_id, amount_ton, destination_address, user)
     
     try:
-        print(f"\n🔄 Processing W5 withdraw for user {telegram_id}")
+        print(f"\n🔄 Processing withdraw for user {telegram_id}")
         print(f"   Amount: {amount_ton} TON")
         print(f"   To: {destination_address}")
         print(f"   From: {WEB_ADDRESS}")
         
         # Buat fungsi async
-        async def process_w5_withdraw():
-            # Gunakan WalletV5R1 (dari output dir)
-            try:
-                from pytoniq import WalletV5R1
-                wallet = await WalletV5R1.from_private_key(
-                    private_key=PRIVATE_KEY_BYTES,
-                    workchain=0
-                )
-                print("✅ Using WalletV5R1")
-            except ImportError:
-                from pytoniq import WalletV5R2
-                wallet = await WalletV5R2.from_private_key(
-                    private_key=PRIVATE_KEY_BYTES,
-                    workchain=0
-                )
-                print("✅ Using WalletV5R2")
+        async def process_withdraw():
+            # Gunakan WalletV4R2 (yang tersedia)
+            from pytoniq import WalletV4R2
+            
+            # Buat wallet dari private key
+            wallet = await WalletV4R2.from_private_key(
+                private_key=PRIVATE_KEY_BYTES,
+                workchain=0
+            )
             
             # Verifikasi address
             wallet_address = wallet.address.to_string()
@@ -287,7 +275,7 @@ def withdraw_w5():
         # Jalankan async
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(process_w5_withdraw())
+        result = loop.run_until_complete(process_withdraw())
         loop.close()
         
         if result['success']:
@@ -302,7 +290,10 @@ def withdraw_w5():
                 transaction_type='withdraw'
             )
             
-            # Return dengan format yang benar
+            # Catat di withdraw_requests
+            db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
+            db.update_withdraw_request_with_hash(result['transaction_hash'], telegram_id)
+            
             return jsonify({
                 'success': True,
                 'transaction_hash': result['transaction_hash'],
@@ -324,29 +315,9 @@ def withdraw_w5():
         }), 500
 
 def withdraw_manual(telegram_id, amount_ton, destination_address, user):
-    """Fallback manual withdraw jika W5 tidak tersedia"""
+    """Fallback manual withdraw jika wallet tidak tersedia"""
     try:
-        with db.get_connection() as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS withdraw_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    telegram_id TEXT,
-                    amount_ton REAL,
-                    destination_address TEXT,
-                    status TEXT DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            cursor = conn.execute('''
-                INSERT INTO withdraw_requests (user_id, telegram_id, amount_ton, destination_address)
-                VALUES (?, ?, ?, ?)
-                RETURNING id
-            ''', (user['id'], telegram_id, amount_ton, destination_address))
-            
-            request_id = cursor.fetchone()[0]
-            conn.commit()
+        request_id = db.save_withdraw_request(user['id'], telegram_id, amount_ton, destination_address)
         
         return jsonify({
             'success': True,
@@ -391,30 +362,8 @@ def check_balance():
 def get_withdraw_history(telegram_id):
     """Get user withdraw history"""
     try:
-        with db.get_connection() as conn:
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS withdraw_requests (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER,
-                    telegram_id TEXT,
-                    amount_ton REAL,
-                    destination_address TEXT,
-                    status TEXT DEFAULT 'pending',
-                    transaction_hash TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    processed_at TIMESTAMP
-                )
-            ''')
-            
-            cursor = conn.execute('''
-                SELECT * FROM withdraw_requests 
-                WHERE telegram_id = ?
-                ORDER BY created_at DESC
-                LIMIT 20
-            ''', (telegram_id,))
-            
-            requests = [dict(row) for row in cursor.fetchall()]
-            return jsonify({'success': True, 'requests': requests})
+        requests = db.get_withdraw_requests(telegram_id, 20)
+        return jsonify({'success': True, 'requests': requests})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
@@ -474,13 +423,13 @@ def get_user(telegram_id):
         return jsonify({
             'success': True,
             'user': {
-                'telegram_id': user[1],
-                'telegram_username': user[2],
-                'telegram_first_name': user[3],
-                'telegram_last_name': user[4],
-                'telegram_photo_url': user[5],
-                'wallet_address': user[6],
-                'created_at': user[7]
+                'telegram_id': user['telegram_id'],
+                'telegram_username': user['telegram_username'],
+                'telegram_first_name': user['telegram_first_name'],
+                'telegram_last_name': user['telegram_last_name'],
+                'telegram_photo_url': user['telegram_photo_url'],
+                'wallet_address': user['wallet_address'],
+                'created_at': user['created_at']
             }
         })
     return jsonify({'success': False, 'error': 'User not found'}), 404
@@ -563,7 +512,7 @@ def verify_transaction():
     if not user:
         return jsonify({'success': False, 'error': 'User not found'}), 404
     
-    # Langsung simpan sebagai confirmed karena transaksi sudah berhasil di blockchain
+    # Simpan sebagai confirmed
     tx_id = db.save_transaction(
         user_id=user['id'],
         transaction_hash=transaction_hash,
@@ -575,9 +524,6 @@ def verify_transaction():
     )
     
     if tx_id:
-        # Auto confirm karena transaksi sudah berhasil
-        db.confirm_transaction(transaction_hash)
-        
         return jsonify({
             'success': True,
             'transaction_id': tx_id,
@@ -616,47 +562,25 @@ def create_deposit_transaction():
     if not user:
         return jsonify({'success': False, 'error': 'User not found'}), 404
     
-    # 1️⃣ BUAT MEMO DENGAN FORMAT YANG SANGAT SEDERHANA
-    # Hindari karakter khusus, gunakan hanya alfanumerik dan underscore
+    # Buat memo
     timestamp = int(datetime.now().timestamp())
-    # Format: deposit_USERID_TIMESTAMP
-    # Contoh: deposit_123456789_1234567890
     memo_plain = f"deposit_{telegram_id}_{timestamp}"
     
-    # 2️⃣ VALIDASI PANJANG MEMO
-    # Pastikan tidak terlalu panjang (maks 120 karakter setelah di-encode)
     if len(memo_plain) > 80:
-        # Gunakan hash jika terlalu panjang
         memo_hash = hashlib.sha256(memo_plain.encode()).hexdigest()[:16]
         memo_plain = f"dep_{telegram_id[-4:]}_{memo_hash}"
     
-    # 3️⃣ ENCODE KE BASE64 DENGAN METHOD YANG PALING AMAN
-    # Method 1: encode string ke bytes, lalu ke base64
     memo_bytes = memo_plain.encode('utf-8')
     memo_base64 = base64.b64encode(memo_bytes).decode('utf-8')
     
-    # 4️⃣ VALIDASI BASE64 (harusnya selalu valid, tapi kita cek)
-    try:
-        # Coba decode kembali untuk memastikan
-        decoded = base64.b64decode(memo_base64).decode('utf-8')
-        if decoded != memo_plain:
-            raise ValueError("Encode/decode mismatch")
-    except Exception as e:
-        # Fallback ke encoding yang lebih sederhana
-        memo_base64 = base64.b64encode(memo_plain.encode('ascii', errors='ignore')).decode()
-    
-    # 5️⃣ KONVERSI AMOUNT KE NANOTONS (WAJIB STRING)
     amount_nano = str(int(amount_ton * 1_000_000_000))
     
-    # 6️⃣ BUAT MESSAGE SESUAI FORMAT TON CONNECT
-    # Perhatikan: HANYA field address, amount, payload
     transaction_message = {
         "address": WEB_ADDRESS,
         "amount": amount_nano,
         "payload": memo_base64
     }
     
-    # Simpan ke database (tanpa transaction_hash dulu)
     if user:
         db.save_transaction(
             user_id=user['id'],
@@ -664,16 +588,11 @@ def create_deposit_transaction():
             amount_ton=amount_ton,
             from_address=None,
             to_address=WEB_ADDRESS,
-            memo=memo_plain,  # Simpan plain version
+            memo=memo_plain,
             transaction_type='deposit'
         )
     
-    # Log untuk debugging
-    print(f"📤 Created transaction for user {telegram_id}:")
-    print(f"   Amount: {amount_ton} TON ({amount_nano} nano)")
-    print(f"   Memo (plain): {memo_plain}")
-    print(f"   Memo (base64): {memo_base64}")
-    print(f"   Payload length: {len(memo_base64)} chars")
+    print(f"📤 Created transaction for user {telegram_id}: {amount_ton} TON")
     
     return jsonify({
         'success': True,
@@ -683,58 +602,28 @@ def create_deposit_transaction():
 
 @app.route('/api/create-tonpay-transaction', methods=['POST'])
 def create_tonpay_transaction():
-    """Buat transaksi menggunakan TON Pay API (sesuai dokumentasi resmi)"""
+    """Buat transaksi menggunakan TON Pay API"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
-    sender_address = data.get('sender_address')  # Dari TON Connect
     
-    # Validasi
     if amount_ton < 0.1:
         return jsonify({'success': False, 'error': 'Minimum deposit 0.1 TON'}), 400
     
-    # Get user dari database
     user = db.get_user(telegram_id)
     if not user:
         return jsonify({'success': False, 'error': 'User not found'}), 404
     
-    # Di sini seharusnya panggil createTonPayTransfer dari JavaScript
-    # TAPI karena Python, kita perlu:
-    
-    # OPSI 1: Buat child process untuk menjalankan Node.js script
-    # OPSI 2: Gunakan API eksternal (recommended)
-    
-    # Untuk sementara, kita generate reference di backend
-    import hashlib
     timestamp = int(datetime.now().timestamp())
     reference = f"deposit_{telegram_id}_{timestamp}"
     body_hash = hashlib.sha256(reference.encode()).hexdigest()
     
-    # Simpan tracking data
-    with db.get_connection() as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS payment_tracking (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                reference TEXT UNIQUE,
-                body_base64_hash TEXT,
-                telegram_id TEXT,
-                amount REAL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.execute('''
-            INSERT OR IGNORE INTO payment_tracking (reference, body_base64_hash, telegram_id, amount)
-            VALUES (?, ?, ?, ?)
-        ''', (reference, body_hash, telegram_id, amount_ton))
-        conn.commit()
+    db.save_payment_tracking(reference, body_hash, telegram_id, amount_ton)
     
-    # Format message sesuai TON Connect spec
     message = {
         "address": WEB_ADDRESS,
-        "amount": str(int(amount_ton * 1_000_000_000)),  # Dalam nanoTON
-        "payload": None  # Akan diisi oleh frontend dengan createTonPayTransfer
+        "amount": str(int(amount_ton * 1_000_000_000)),
+        "payload": None
     }
     
     return jsonify({
@@ -746,34 +635,14 @@ def create_tonpay_transaction():
 
 @app.route('/api/store-payment-tracking', methods=['POST'])
 def store_payment_tracking():
-    """Store payment tracking data before sending transaction"""
+    """Store payment tracking data"""
     data = request.json
-    reference = data.get('reference')
-    bodyBase64Hash = data.get('bodyBase64Hash')
-    telegram_id = data.get('telegram_id')
-    amount = data.get('amount')
-    
-    # Simpan ke database tracking
-    with db.get_connection() as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS payment_tracking (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                reference TEXT UNIQUE,
-                body_base64_hash TEXT,
-                telegram_id TEXT,
-                amount REAL,
-                status TEXT DEFAULT 'pending',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.execute('''
-            INSERT INTO payment_tracking (reference, body_base64_hash, telegram_id, amount)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(reference) DO NOTHING
-        ''', (reference, bodyBase64Hash, telegram_id, amount))
-        conn.commit()
-    
+    db.save_payment_tracking(
+        data.get('reference'),
+        data.get('bodyBase64Hash'),
+        data.get('telegram_id'),
+        data.get('amount')
+    )
     return jsonify({'success': True})
 
 
@@ -786,10 +655,10 @@ if __name__ == '__main__':
     print(f"🔑 Private Key: {'✅ Tersedia' if PRIVATE_KEY_BYTES else '❌ Tidak ada'}")
     print(f"🔑 TON Center API: {'✅ Tersedia' if TONCENTER_API_KEY else '❌ Tidak ada'}")
     print(f"📦 TON Library: {'✅ pytoniq tersedia' if TON_LIB_AVAILABLE else '❌ Tidak ada'}")
-    print(f"📦 W5 Support: {'✅ Tersedia' if W5_AVAILABLE else '❌ Tidak ada'}")
+    print(f"📦 Wallet Support: {'✅ WalletV4R2 tersedia' if WALLET_AVAILABLE else '❌ Tidak ada'}")
     
     if not TON_LIB_AVAILABLE:
-        print("⚠️ Install pytoniq untuk payload dan W5: pip install pytoniq pytoniq-core")
+        print("⚠️ Install pytoniq untuk payload: pip install pytoniq pytoniq-core")
     
     print(f"📊 Endpoints available:")
     print(f"   - /api/balance/<telegram_id>")
@@ -797,7 +666,7 @@ if __name__ == '__main__':
     print(f"   - /api/deposit-info")
     print(f"   - /api/verify-transaction")
     print(f"   - /api/create-payload")
-    print(f"   - /api/withdraw-w5 (NEW - untuk W5)")
+    print(f"   - /api/withdraw (NEW - untuk withdraw otomatis)")
     print(f"   - /api/withdraw-history/<telegram_id>")
     print(f"   - /api/check-balance")
     
