@@ -50,26 +50,23 @@ try:
     from pytoniq_core import Cell
     TON_LIB_AVAILABLE = True
     
-    # Cek ketersediaan wallet V5
+    # Cek ketersediaan wallet V5 - sesuaikan dengan output dir(pytoniq)
     W5_AVAILABLE = False
     try:
-        from pytoniq import WalletV5
+        # Dari output dir(pytoniq) terlihat ada WalletV5R1 dan WalletV5R2
+        from pytoniq import WalletV5R1, WalletV5R2
         W5_AVAILABLE = True
-        print("✅ WalletV5 tersedia")
-    except ImportError:
-        try:
-            from pytoniq import WalletV5R1, WalletV5R2
-            W5_AVAILABLE = True
-            print("✅ WalletV5R1/R2 tersedia")
-        except ImportError:
-            print("⚠️ WalletV5 tidak tersedia, withdraw W5 tidak akan berfungsi")
+        print("✅ WalletV5R1/R2 tersedia")
+    except ImportError as e:
+        print(f"⚠️ WalletV5 tidak tersedia: {e}")
     
     print("✅ pytoniq library tersedia")
-except ImportError:
+except ImportError as e:
     TON_LIB_AVAILABLE = False
     W5_AVAILABLE = False
-    print("⚠️ pytoniq tidak terinstall. Install dengan: pip install pytoniq pytoniq-core")
-
+    print(f"⚠️ pytoniq tidak terinstall: {e}")
+    
+    
 # ==================== ENDPOINT UNTUK MEMBUAT PAYLOAD ====================
 
 @app.route('/api/create-payload', methods=['POST'])
@@ -158,7 +155,6 @@ def create_payload():
     })
 
 # ==================== ENDPOINT WITHDRAW UNTUK W5 ====================
-
 @app.route('/api/withdraw-w5', methods=['POST'])
 def withdraw_w5():
     """Withdraw otomatis untuk wallet W5"""
@@ -194,41 +190,40 @@ def withdraw_w5():
     if not PRIVATE_KEY_BYTES:
         return jsonify({'success': False, 'error': 'Private Key tidak dikonfigurasi'}), 500
     
+    # Jika W5 tidak tersedia, langsung return error
     if not W5_AVAILABLE:
-        # Fallback ke mode manual jika W5 tidak tersedia
-        return withdraw_manual(telegram_id, amount_ton, destination_address, user)
+        return jsonify({
+            'success': False, 
+            'error': 'Wallet W5 tidak tersedia di server. Hubungi admin.'
+        }), 500
     
     try:
-        print(f"\n🔄 Processing withdraw for user {telegram_id}")
+        print(f"\n🔄 Processing W5 withdraw for user {telegram_id}")
         print(f"   Amount: {amount_ton} TON")
         print(f"   To: {destination_address}")
         print(f"   From: {WEB_ADDRESS}")
         
         # Buat fungsi async
-        async def process_withdraw():
-            # Coba import wallet yang sesuai
+        async def process_w5_withdraw():
+            # Gunakan WalletV5R1 (dari output dir)
             try:
-                from pytoniq import WalletV5
-                wallet = await WalletV5.from_private_key(
+                from pytoniq import WalletV5R1
+                wallet = await WalletV5R1.from_private_key(
                     private_key=PRIVATE_KEY_BYTES,
                     workchain=0
                 )
-                print("✅ Using WalletV5")
+                print("✅ Using WalletV5R1")
             except ImportError:
-                try:
-                    from pytoniq import WalletV5R1
-                    wallet = await WalletV5R1.from_private_key(
-                        private_key=PRIVATE_KEY_BYTES,
-                        workchain=0
-                    )
-                    print("✅ Using WalletV5R1")
-                except ImportError:
-                    from pytoniq import WalletV5R2
-                    wallet = await WalletV5R2.from_private_key(
-                        private_key=PRIVATE_KEY_BYTES,
-                        workchain=0
-                    )
-                    print("✅ Using WalletV5R2")
+                from pytoniq import WalletV5R2
+                wallet = await WalletV5R2.from_private_key(
+                    private_key=PRIVATE_KEY_BYTES,
+                    workchain=0
+                )
+                print("✅ Using WalletV5R2")
+            
+            # Verifikasi address
+            wallet_address = wallet.address.to_string()
+            print(f"📌 Wallet address: {wallet_address}")
             
             # Dapatkan seqno
             try:
@@ -278,19 +273,26 @@ def withdraw_w5():
             
             if send_result.get('ok'):
                 tx_hash = hashlib.sha256(transfer.to_boc()).hexdigest()
-                return {'success': True, 'transaction_hash': tx_hash}
+                return {
+                    'success': True, 
+                    'transaction_hash': tx_hash,
+                    'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
+                }
             else:
-                return {'success': False, 'error': send_result.get('error', 'Unknown error')}
+                return {
+                    'success': False, 
+                    'error': send_result.get('error', 'Unknown error')
+                }
         
         # Jalankan async
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(process_withdraw())
+        result = loop.run_until_complete(process_w5_withdraw())
         loop.close()
         
         if result['success']:
             # Simpan di database
-            db.save_transaction(
+            tx_id = db.save_transaction(
                 user_id=user['id'],
                 transaction_hash=result['transaction_hash'],
                 amount_ton=amount_ton,
@@ -300,17 +302,26 @@ def withdraw_w5():
                 transaction_type='withdraw'
             )
             
+            # Return dengan format yang benar
             return jsonify({
                 'success': True,
                 'transaction_hash': result['transaction_hash'],
-                'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
+                'message': result['message']
             })
         else:
-            return jsonify({'success': False, 'error': result['error']}), 500
+            return jsonify({
+                'success': False, 
+                'error': result['error']
+            }), 500
             
     except Exception as e:
         print(f"❌ Withdraw error: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Error: {str(e)}'
+        }), 500
 
 def withdraw_manual(telegram_id, amount_ton, destination_address, user):
     """Fallback manual withdraw jika W5 tidak tersedia"""
