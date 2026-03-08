@@ -627,14 +627,13 @@ def process_withdraw_backend():
         from pytoniq import WalletV4, LiteClient, LiteBalancer
         
         # Inisialisasi client ke jaringan TON
-        # Untuk testnet atau mainnet
-        is_testnet = CONFIG.NETWORK == 'testnet'  # Anda perlu tambahkan config ini
+        # Gunakan variabel NETWORK yang sudah didefinisikan
+        is_testnet = NETWORK == 'testnet'
         
         if is_testnet:
             client = LiteBalancer.from_testnet_config(trust_level=0)
         else:
-            # Untuk mainnet, Anda perlu konfigurasi liteserver
-            # Gunakan toncenter API atau liteserver publik
+            # Untuk mainnet, gunakan konfigurasi yang tepat
             client = LiteClient.from_mainnet_config(trust_level=0)
         
         async def send_transaction():
@@ -649,10 +648,12 @@ def process_withdraw_backend():
             # Buat comment
             comment = f"wd:{telegram_id}:{reference}"
             
-            # Kirim transaksi
+            # Kirim transaksi - amount dalam nanoTON
+            amount_nano = int(amount_ton * 1_000_000_000)
+            
             tx_hash = await wallet.transfer(
                 destination=destination_address,
-                amount=int(amount_ton * 1_000_000_000),  # Konversi ke nano
+                amount=amount_nano,
                 body=comment
             )
             
