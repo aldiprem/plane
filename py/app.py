@@ -735,7 +735,8 @@ def process_withdraw_test():
     
     try:
         # Generate fake transaction hash untuk testing
-        fake_tx_hash = f"test_tx_{int(time.time())}_{telegram_id[-4:]}_{reference[-8:]}"
+        timestamp = int(time.time())
+        fake_tx_hash = f"test_tx_{timestamp}_{telegram_id[-4:]}_{reference[-8:]}"
         
         print(f"🧪 TEST MODE: Processing withdraw for user {telegram_id}")
         print(f"   Amount: {amount_ton} TON")
@@ -754,18 +755,29 @@ def process_withdraw_test():
             transaction_type='withdraw'
         )
         
+        if not tx_id:
+            return jsonify({
+                'success': False,
+                'error': 'Gagal menyimpan transaksi'
+            }), 500
+        
         # Update withdraw request
         db.update_withdraw_request_by_reference(reference, fake_tx_hash, 'completed')
+        
+        # Update payment tracking
+        db.update_payment_tracking_status(reference, 'completed', fake_tx_hash)
         
         return jsonify({
             'success': True,
             'transaction_hash': fake_tx_hash,
             'amount_ton': amount_ton,
-            'message': 'TEST MODE: Withdraw berhasil dicatat di database (tidak mengirim TON sungguhan)'
+            'message': 'TEST MODE: Withdraw berhasil dicatat di database'
         })
         
     except Exception as e:
         print(f"❌ Error in test withdraw: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False, 
             'error': f'Gagal memproses withdraw: {str(e)}'
