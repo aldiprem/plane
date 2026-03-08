@@ -14,29 +14,35 @@ let tonConnectUI = null;
 let telegramUser = null;
 let tonPay = null;
 
-// ==================== INITIALIZATION ====================
+// Di bagian initialization
 document.addEventListener('DOMContentLoaded', async () => {
-    debugLog('🚀 Application starting...');
-    
-    try {
-        // Check if TON Pay is available
-        if (window.TonPay) {
-            tonPay = window.TonPay;
-            debugLog('✅ TON Pay SDK tersedia', { 
-                functions: Object.keys(tonPay) 
-            });
-        } else {
-            debugLog('❌ TON Pay SDK TIDAK tersedia - pastikan script di-load dengan benar');
-        }
+  debugLog('🚀 Application starting...');
 
-        // Initialize components
-        initTelegram();
-        initTonConnect();
-        updateNetworkBadge();
-        
-    } catch (error) {
-        debugLog('❌ Initialization error:', error);
+  try {
+    // Set default max withdraw
+    const maxWithdrawEl = document.getElementById('max-withdraw');
+    if (maxWithdrawEl) {
+      maxWithdrawEl.textContent = '10000';
     }
+
+    // Check if TON Pay is available
+    if (window.TonPay) {
+      tonPay = window.TonPay;
+      debugLog('✅ TON Pay SDK tersedia', {
+        functions: Object.keys(tonPay)
+      });
+    } else {
+      debugLog('❌ TON Pay SDK TIDAK tersedia - pastikan script di-load dengan benar');
+    }
+
+    // Initialize components
+    initTelegram();
+    initTonConnect();
+    updateNetworkBadge();
+
+  } catch (error) {
+    debugLog('❌ Initialization error:', error);
+  }
 });
 
 // ==================== WITHDRAW FUNCTIONS ====================
@@ -156,7 +162,9 @@ function updateMaxWithdraw() {
 
   if (balanceElement && maxWithdrawElement) {
     const balance = parseFloat(balanceElement.textContent) || 0;
-    maxWithdrawElement.textContent = balance.toFixed(2);
+    // Max withdraw adalah balance atau 10000, mana yang lebih kecil
+    const maxAllowed = Math.min(balance, 10000);
+    maxWithdrawElement.textContent = maxAllowed.toFixed(2);
 
     if (tonConnectUI?.connected) {
       withdrawWarning.classList.add('hidden');
@@ -164,7 +172,7 @@ function updateMaxWithdraw() {
 
       if (withdrawAmount) {
         const amount = parseFloat(withdrawAmount.value) || 0;
-        withdrawAmount.style.borderColor = amount > balance ? 'var(--danger-color)' : '';
+        withdrawAmount.style.borderColor = amount > maxAllowed ? 'var(--danger-color)' : '';
       }
     } else {
       withdrawWarning.classList.remove('hidden');
