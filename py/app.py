@@ -628,15 +628,23 @@ def process_withdraw_backend():
         
         from pytoniq import WalletV4, LiteClient, LiteBalancer
         
+        # Gunakan LiteBalancer untuk koneksi yang lebih stabil
         is_testnet = NETWORK == 'testnet'
         
+        # Inisialisasi client yang benar
         if is_testnet:
+            # Untuk testnet
             client = LiteBalancer.from_testnet_config(trust_level=0)
         else:
-            # Untuk mainnet, gunakan konfigurasi yang tepat
-            client = LiteClient.from_mainnet_config(trust_level=0)
+            # Untuk mainnet - gunakan provider publik atau toncenter
+            # Alternatif 1: Gunakan LiteBalancer untuk mainnet
+            client = LiteBalancer.from_mainnet_config(trust_level=0)
+            
+            # Alternatif 2: Gunakan toncenter HTTP API (lebih sederhana)
+            # Tapi kita akan gunakan LiteBalancer dulu
         
         async def send_transaction():
+            # Start client
             await client.start_up()
             
             # Buat wallet dari private key
@@ -651,13 +659,15 @@ def process_withdraw_backend():
             # Kirim transaksi - amount dalam nanoTON
             amount_nano = int(amount_ton * 1_000_000_000)
             
+            # Transfer dengan body sebagai string (akan otomatis diencode)
             tx_hash = await wallet.transfer(
                 destination=destination_address,
                 amount=amount_nano,
-                body=comment
+                body=comment  # pytoniq akan mengencode string ke cell
             )
             
-            await client.shut_down()
+            # Close client
+            await client.close()
             return tx_hash
         
         # Jalankan async function
