@@ -99,10 +99,10 @@ async function processWithdraw() {
 
     debugLog('✅ Withdraw initiated:', initData);
 
-    // 2. MINTA BACKEND MEMPROSES WITHDRAW (menggunakan private key)
-    showWithdrawStatus('⏳ Processing withdrawal on server...', 'info');
+    // 2. GUNAKAN ENDPOINT TEST (tidak mengirim TON sungguhan)
+    showWithdrawStatus('⏳ Processing withdrawal (TEST MODE)...', 'info');
 
-    const processResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/process-withdraw`, {
+    const processResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/process-withdraw-test`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -119,11 +119,11 @@ async function processWithdraw() {
       throw new Error(processData.error || 'Failed to process withdraw');
     }
 
-    debugLog('✅ Withdraw processed by server:', processData);
+    debugLog('✅ Withdraw processed by server (TEST MODE):', processData);
 
     // 3. Tampilkan sukses
     showWithdrawStatus(
-      `✅ Withdrawal successful! ${amount} TON sent to your wallet.\nTransaction: ${processData.transaction_hash.slice(0, 10)}...`,
+      `✅ TEST MODE: Withdrawal recorded! ${amount} TON deducted from your balance.\nTransaction: ${processData.transaction_hash}`,
       'success'
     );
 
