@@ -198,19 +198,18 @@ def withdraw():
         print(f"   To: {destination_address}")
         print(f"   From: {WEB_ADDRESS}")
         
-        # Buat fungsi async
         async def process_withdraw():
             # Gunakan WalletV4R2 (yang tersedia)
-            from pytoniq import WalletV4R2, TonCenterV3Provider
+            from pytoniq import WalletV4R2, LiteClient
             
-            # Buat provider TON Center V3
-            provider = TonCenterV3Provider(
-                base_url='https://toncenter.com/api/v3/',
-                api_key=TONCENTER_API_KEY
+            # Buat provider LiteClient untuk koneksi ke blockchain
+            provider = LiteClient.from_mainnet_config(
+                trust_level=0,  # Level kepercayaan (0 = trust everything)
+                liteservers=1   # Jumlah liteserver
             )
             
-            # Start provider
-            await provider.start()
+            # CONNECT, bukan start!
+            await provider.connect()
             
             try:
                 # Buat wallet dari private key dengan provider
@@ -223,9 +222,11 @@ def withdraw():
                 wallet_address = wallet.address.to_string()
                 print(f"📌 Wallet address: {wallet_address}")
                 
-                # Dapatkan seqno
+                # Dapatkan seqno menggunakan method yang tersedia
                 try:
-                    seqno = await wallet.seqno()
+                    # Coba dapatkan seqno melalui get_account_state
+                    account_state = await provider.get_account_state(wallet_address)
+                    seqno = account_state.seqno if hasattr(account_state, 'seqno') else 0
                     print(f"📊 Seqno: {seqno}")
                 except Exception as e:
                     seqno = 0
@@ -281,6 +282,9 @@ def withdraw():
                         'success': False, 
                         'error': send_result.get('error', 'Unknown error')
                     }
+            except Exception as e:
+                print(f"❌ Error in transfer: {e}")
+                raise
             finally:
                 # Pastikan provider di-close
                 await provider.close()
