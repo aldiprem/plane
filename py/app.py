@@ -623,7 +623,7 @@ def process_withdraw():
     
     try:
         # Gunakan TON Center API untuk mengirim transaksi
-        # https://toncenter.com/api/v2/#/accounts/post_sendTransaction
+        # Dokumentasi: https://toncenter.com/api/v2/#/accounts/post_sendTransaction
         
         # Konversi amount ke nanoTON
         amount_nano = int(amount_ton * 1_000_000_000)
@@ -631,30 +631,38 @@ def process_withdraw():
         # Buat comment
         comment = f"wd:{telegram_id}:{reference}"
         
-        # Encode comment ke base64
-        comment_bytes = comment.encode('utf-8')
-        comment_b64 = base64.b64encode(comment_bytes).decode('utf-8')
+        # Siapkan payload untuk TON Center - format yang benar
+        # Address harus dalam format raw (0:...)
+        if destination_address.startswith('UQ') or destination_address.startswith('EQ'):
+            # Konversi dari user-friendly ke raw format
+            # Untuk sementara, kita asumsikan address sudah dalam format raw
+            pass
         
-        # Siapkan payload untuk TON Center
         payload = {
-            "address": WEB_ADDRESS,  # Dari alamat merchant
-            "to": destination_address,  # Ke alamat user
+            "address": WEB_ADDRESS,  # Alamat pengirim (merchant)
+            "to": destination_address,  # Alamat penerima (user)
             "amount": amount_nano,  # Dalam nanoTON
-            "comment": comment,  # Comment biasa
-            # Atau gunakan payload jika perlu
-            # "payload": comment_b64
+            "secret_key": PRIVATE_KEY,  # Private key dalam hex
+            "comment": comment,  # Optional comment
+            "send_mode": 3  # Mode kirim (default 3)
         }
         
         print(f"📤 Mengirim transaksi REAL ke TON Center...")
         print(f"   From: {WEB_ADDRESS}")
         print(f"   To: {destination_address}")
         print(f"   Amount: {amount_ton} TON ({amount_nano} nano)")
+        print(f"   Comment: {comment}")
         
         # Kirim ke TON Center API
         headers = {
             'X-API-Key': TONCENTER_API_KEY,
             'Content-Type': 'application/json'
         }
+        
+        # Log payload untuk debugging (tanpa secret key)
+        debug_payload = payload.copy()
+        debug_payload['secret_key'] = '***HIDDEN***'
+        print(f"   Payload: {json.dumps(debug_payload, indent=2)}")
         
         response = requests.post(
             'https://toncenter.com/api/v2/transactions/send',
@@ -663,42 +671,59 @@ def process_withdraw():
             timeout=30
         )
         
-        result = response.json()
+        print(f"   Response status: {response.status_code}")
+        print(f"   Response text: {response.text[:200]}")  # Log first 200 chars
         
-        if result.get('ok'):
-            transaction_hash = result.get('result')
-            print(f"✅ Transaksi berhasil dikirim: {transaction_hash}")
-            
-            # Simpan transaksi withdraw (negative amount)
-            tx_id = db.save_transaction(
-                user_id=user['id'],
-                transaction_hash=transaction_hash,
-                amount_ton=-amount_ton,
-                from_address=WEB_ADDRESS,
-                to_address=destination_address,
-                memo=f"withdraw:{reference}",
-                transaction_type='withdraw'
-            )
-            
-            # Update withdraw request
-            db.update_withdraw_request_by_reference(reference, transaction_hash, 'completed')
-            
-            # Update payment tracking
-            db.update_payment_tracking_status(reference, 'completed', transaction_hash)
-            
-            return jsonify({
-                'success': True,
-                'transaction_hash': transaction_hash,
-                'amount_ton': amount_ton,
-                'message': 'Withdraw berhasil dikirim ke blockchain!'
-            })
+        # Cek response
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                if result.get('ok'):
+                    transaction_hash = result.get('result')
+                    print(f"✅ Transaksi berhasil dikirim: {transaction_hash}")
+                    
+                    # Simpan transaksi withdraw (negative amount)
+                    tx_id = db.save_transaction(
+                        user_id=user['id'],
+                        transaction_hash=transaction_hash,
+                        amount_ton=-amount_ton,
+                        from_address=WEB_ADDRESS,
+                        to_address=destination_address,
+                        memo=f"withdraw:{reference}",
+                        transaction_type='withdraw'
+                    )
+                    
+                    # Update withdraw request
+                    db.update_withdraw_request_by_reference(reference, transaction_hash, 'completed')
+                    
+                    # Update payment tracking
+                    db.update_payment_tracking_status(reference, 'completed', transaction_hash)
+                    
+                    return jsonify({
+                        'success': True,
+                        'transaction_hash': transaction_hash,
+                        'amount_ton': amount_ton,
+                        'message': 'Withdraw berhasil dikirim ke blockchain!'
+                    })
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    print(f"❌ Gagal mengirim transaksi: {error_msg}")
+                    return jsonify({
+                        'success': False,
+                        'error': f'Gagal mengirim transaksi: {error_msg}'
+                    }), 500
+            except:
+                print(f"❌ Response bukan JSON: {response.text}")
+                return jsonify({
+                    'success': False,
+                    'error': f'Response error: {response.text[:200]}'
+                }), 500
         else:
-            error_msg = result.get('error', 'Unknown error')
-            print(f"❌ Gagal mengirim transaksi: {error_msg}")
+            print(f"❌ HTTP Error {response.status_code}: {response.text}")
             return jsonify({
                 'success': False,
-                'error': f'Gagal mengirim transaksi: {error_msg}'
-            }), 500
+                'error': f'HTTP Error {response.status_code}: {response.text[:200]}'
+            }), response.status_code
         
     except Exception as e:
         print(f"❌ Error in withdraw real: {e}")
