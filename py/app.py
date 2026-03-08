@@ -585,48 +585,113 @@ def store_payment_tracking():
         data.get('amount')
     )
     return jsonify({'success': True})
+
 @app.route('/api/process-withdraw', methods=['POST'])
 def process_withdraw_backend():
-    """Proses withdraw dari backend (aman dengan private key)"""
+    """Proses withdraw dari backend menggunakan private key"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
     destination_address = data.get('destination_address')
     reference = data.get('reference')
     
-    # Validasi
+    # Validasi input
+    if amount_ton < 0.1:
+        return jsonify({'success': False, 'error': 'Minimum withdraw 0.1 TON'}), 400
+    
+    if not destination_address or len(destination_address) < 30:
+        return jsonify({'success': False, 'error': 'Alamat tujuan tidak valid'}), 400
+    
+    # Cek user
     user = db.get_user(telegram_id)
     if not user:
-        return jsonify({'success': False, 'error': 'User not found'}), 404
+        return jsonify({'success': False, 'error': 'User tidak ditemukan'}), 404
     
     # Cek saldo
-    balance = db.get_user_balance(telegram_id)
-    if balance < amount_ton:
-        return jsonify({'success': False, 'error': 'Insufficient balance'}), 400
+    current_balance = db.get_user_balance(telegram_id)
+    if current_balance < amount_ton:
+        return jsonify({
+            'success': False, 
+            'error': f'Saldo tidak cukup. Anda memiliki {current_balance} TON'
+        }), 400
     
-    # Proses transfer menggunakan private key (pytoniq)
+    # Validasi private key
+    if not PRIVATE_KEY_BYTES:
+        return jsonify({'success': False, 'error': 'Private key tidak tersedia di server'}), 500
+    
     try:
         # Gunakan pytoniq untuk membuat dan mengirim transaksi
-        # ...
+        if not TON_LIB_AVAILABLE:
+            return jsonify({'success': False, 'error': 'TON library tidak tersedia'}), 500
         
-        # Kurangi saldo user
-        db.save_transaction(
+        from pytoniq import WalletV4, LiteClient, LiteBalancer
+        
+        # Inisialisasi client ke jaringan TON
+        # Untuk testnet atau mainnet
+        is_testnet = CONFIG.NETWORK == 'testnet'  # Anda perlu tambahkan config ini
+        
+        if is_testnet:
+            client = LiteBalancer.from_testnet_config(trust_level=0)
+        else:
+            # Untuk mainnet, Anda perlu konfigurasi liteserver
+            # Gunakan toncenter API atau liteserver publik
+            client = LiteClient.from_mainnet_config(trust_level=0)
+        
+        async def send_transaction():
+            await client.start_up()
+            
+            # Buat wallet dari private key
+            wallet = await WalletV4.from_private_key(
+                client=client,
+                private_key=PRIVATE_KEY_BYTES
+            )
+            
+            # Buat comment
+            comment = f"wd:{telegram_id}:{reference}"
+            
+            # Kirim transaksi
+            tx_hash = await wallet.transfer(
+                destination=destination_address,
+                amount=int(amount_ton * 1_000_000_000),  # Konversi ke nano
+                body=comment
+            )
+            
+            await client.shut_down()
+            return tx_hash
+        
+        # Jalankan async function
+        import asyncio
+        tx_hash = asyncio.run(send_transaction())
+        
+        print(f"✅ Withdraw transaction sent: {tx_hash}")
+        
+        # Simpan transaksi withdraw (negative amount untuk mengurangi saldo)
+        tx_id = db.save_transaction(
             user_id=user['id'],
             transaction_hash=tx_hash,
-            amount_ton=-amount_ton,
+            amount_ton=-amount_ton,  # Negative untuk withdraw
             from_address=WEB_ADDRESS,
             to_address=destination_address,
             memo=f"withdraw:{reference}",
             transaction_type='withdraw'
         )
         
+        # Update withdraw request
+        db.update_withdraw_request_by_reference(reference, tx_hash, 'completed')
+        
         return jsonify({
             'success': True,
-            'transaction_hash': tx_hash
+            'transaction_hash': tx_hash,
+            'amount_ton': amount_ton,
+            'message': 'Withdraw berhasil diproses'
         })
+        
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
-
+        print(f"❌ Error processing withdraw: {e}")
+        return jsonify({
+            'success': False, 
+            'error': f'Gagal memproses withdraw: {str(e)}'
+        }), 500
 
 # ==================== MAIN ====================
 if __name__ == '__main__':
