@@ -652,3 +652,9 @@ body {
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.status-message.info {
+  background: rgba(33, 150, 243, 0.1);
+  color: #1976d2;
+  border: 1px solid #bbdefb;
+}
