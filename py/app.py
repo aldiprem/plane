@@ -703,6 +703,73 @@ def process_withdraw_backend():
             'success': False, 
             'error': f'Gagal memproses withdraw: {str(e)}'
         }), 500
+        
+@app.route('/api/process-withdraw-test', methods=['POST'])
+def process_withdraw_test():
+    """Versi testing - hanya mencatat di database, tidak mengirim TON sungguhan"""
+    data = request.json
+    telegram_id = data.get('telegram_id')
+    amount_ton = float(data.get('amount_ton', 0))
+    destination_address = data.get('destination_address')
+    reference = data.get('reference')
+    
+    # Validasi input
+    if amount_ton < 0.1:
+        return jsonify({'success': False, 'error': 'Minimum withdraw 0.1 TON'}), 400
+    
+    if not destination_address or len(destination_address) < 30:
+        return jsonify({'success': False, 'error': 'Alamat tujuan tidak valid'}), 400
+    
+    # Cek user
+    user = db.get_user(telegram_id)
+    if not user:
+        return jsonify({'success': False, 'error': 'User tidak ditemukan'}), 404
+    
+    # Cek saldo
+    current_balance = db.get_user_balance(telegram_id)
+    if current_balance < amount_ton:
+        return jsonify({
+            'success': False, 
+            'error': f'Saldo tidak cukup. Anda memiliki {current_balance} TON'
+        }), 400
+    
+    try:
+        # Generate fake transaction hash untuk testing
+        fake_tx_hash = f"test_tx_{int(time.time())}_{telegram_id[-4:]}_{reference[-8:]}"
+        
+        print(f"🧪 TEST MODE: Processing withdraw for user {telegram_id}")
+        print(f"   Amount: {amount_ton} TON")
+        print(f"   To: {destination_address}")
+        print(f"   Reference: {reference}")
+        print(f"   Fake TX: {fake_tx_hash}")
+        
+        # Simpan transaksi withdraw (negative amount untuk mengurangi saldo)
+        tx_id = db.save_transaction(
+            user_id=user['id'],
+            transaction_hash=fake_tx_hash,
+            amount_ton=-amount_ton,  # Negative untuk withdraw
+            from_address=WEB_ADDRESS,
+            to_address=destination_address,
+            memo=f"withdraw:{reference}",
+            transaction_type='withdraw'
+        )
+        
+        # Update withdraw request
+        db.update_withdraw_request_by_reference(reference, fake_tx_hash, 'completed')
+        
+        return jsonify({
+            'success': True,
+            'transaction_hash': fake_tx_hash,
+            'amount_ton': amount_ton,
+            'message': 'TEST MODE: Withdraw berhasil dicatat di database (tidak mengirim TON sungguhan)'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in test withdraw: {e}")
+        return jsonify({
+            'success': False, 
+            'error': f'Gagal memproses withdraw: {str(e)}'
+        }), 500
 
 # ==================== MAIN ====================
 if __name__ == '__main__':
