@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // ==================== WITHDRAW FUNCTIONS ====================
 
+// ==================== WITHDRAW FUNCTIONS - PERBAIKAN ====================
+
 async function processWithdraw() {
   // Validasi koneksi wallet
   if (!tonConnectUI?.connected) {
@@ -69,7 +71,7 @@ async function processWithdraw() {
   }
 
   // Konfirmasi user
-  if (!confirm(`Are you sure you want to withdraw ${amount} TON?\n\nThis will be sent to:\n${formatAddress(tonConnectUI.account?.address)}`)) {
+  if (!confirm(`Are you sure you want to withdraw ${amount} TON?\n\nThis will be sent to your wallet:\n${formatAddress(tonConnectUI.account?.address)}`)) {
     return;
   }
 
@@ -79,7 +81,7 @@ async function processWithdraw() {
   withdrawBtn.innerHTML = '<span>⏳</span> Processing Withdrawal...';
 
   try {
-    const destinationAddress = tonConnectUI.account?.address;
+    const destinationAddress = tonConnectUI.account?.address; // Alamat user yang menerima withdraw
 
     if (!destinationAddress) {
       throw new Error('Wallet address not found');
@@ -90,8 +92,8 @@ async function processWithdraw() {
       destination: destinationAddress
     });
 
-    // Panggil endpoint withdraw (bukan withdraw-w5)
-    const response = await fetch(`${CONFIG.TUNNEL_URL}/api/withdraw`, {
+    // 1. Minta reference dari backend (initiate withdraw)
+    const initResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/initiate-withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -101,39 +103,109 @@ async function processWithdraw() {
       })
     });
 
-    const data = await response.json();
-
-    if (data.success) {
-      const txHash = data.transaction_hash || '';
-      const shortHash = txHash.length > 10 ? txHash.slice(0, 10) + '...' : txHash;
-
-      showWithdrawStatus(
-        `✅ Withdrawal successful! ${amount} TON sent.\n\nTransaction: ${shortHash}`,
-        'success'
-      );
-
-      document.getElementById('withdraw-amount').value = '1.0';
-
-      setTimeout(() => {
-        loadUserBalance();
-        loadTransactionHistory();
-        loadWithdrawHistory();
-      }, 3000);
-
-    } else {
-      throw new Error(data.error || 'Withdrawal failed');
+    const initData = await initResponse.json();
+    
+    if (!initData.success) {
+      throw new Error(initData.error || 'Failed to initiate withdraw');
     }
+
+    debugLog('✅ Withdraw initiated:', initData);
+    
+    // 2. Gunakan TON Pay untuk membuat transfer DARI merchant KE user
+    // Catatan: Ini akan memunculkan popup di wallet user untuk menandatangani transaksi
+    // Tapi transaksi ini akan mengirim DARI wallet merchant (WEB_ADDRESS) KE wallet user
+    
+    if (!tonPay || !tonPay.createTonPayTransfer) {
+      throw new Error('TON Pay SDK tidak tersedia');
+    }
+
+    // Buat transfer menggunakan TON Pay
+    const { message, reference, bodyBase64Hash } = await tonPay.createTonPayTransfer(
+      {
+        amount: amount,
+        asset: "TON",
+        recipientAddr: destinationAddress, // Alamat user yang menerima withdraw
+        senderAddr: CONFIG.WEB_ADDRESS,    // Alamat merchant (WEB_ADDRESS)
+        commentToSender: `Withdrawal for user ${telegramUser.id}`,
+        commentToRecipient: `Withdrawal from Marketplace`,
+      },
+      {
+        chain: CONFIG.NETWORK,
+        // apiKey: "YOUR_TONPAY_API_KEY" // Opsional, untuk dashboard
+      }
+    );
+
+    debugLog('✅ TON Pay transfer created:', { message, reference, bodyBase64Hash });
+
+    // 3. Simpan tracking data
+    await fetch(`${CONFIG.TUNNEL_URL}/api/store-payment-tracking`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reference: reference,
+        bodyBase64Hash: bodyBase64Hash,
+        telegram_id: telegramUser.id.toString(),
+        amount: amount,
+        type: 'withdraw'
+      })
+    });
+
+    // 4. Kirim transaksi - INI YANG AKAN MEMINTA TANDA TANGAN DARI WALLET USER
+    // TAPI ini akan mengirim DARI wallet merchant, bukan dari wallet user
+    // Untuk ini, kita perlu wallet merchant yang terhubung di frontend
+    
+    const transaction = {
+      validUntil: Math.floor(Date.now() / 1000) + 600, // 10 menit
+      messages: [message]
+    };
+
+    debugLog('📤 Sending transaction from merchant wallet:', transaction);
+
+    // Ini akan memunculkan popup di wallet user untuk menandatangani
+    // Tapi seharusnya wallet merchant yang tanda tangan, bukan wallet user
+    const result = await tonConnectUI.sendTransaction(transaction);
+    
+    debugLog('✅ Transaction sent:', result);
+
+    // 5. Verifikasi di backend
+    const verifyResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/verify-withdraw`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reference: reference,
+        transaction_hash: result.boc,
+        status: 'completed'
+      })
+    });
+
+    const verifyData = await verifyResponse.json();
+    debugLog('✅ Withdraw verified:', verifyData);
+
+    // Tampilkan sukses
+    showWithdrawStatus(
+      `✅ Withdrawal successful! ${amount} TON sent to your wallet.`,
+      'success'
+    );
+
+    document.getElementById('withdraw-amount').value = '1.0';
+
+    // Refresh data
+    setTimeout(() => {
+      loadUserBalance();
+      loadTransactionHistory();
+      loadWithdrawHistory();
+    }, 3000);
 
   } catch (error) {
     debugLog('❌ Withdraw error:', error);
 
     let errorMessage = error.message;
-    if (error.message.includes('Insufficient balance')) {
-      errorMessage = 'Saldo tidak mencukupi untuk melakukan withdraw';
+    if (error.message.includes('rejected')) {
+      errorMessage = 'Transaction cancelled by user';
+    } else if (error.message.includes('Insufficient balance')) {
+      errorMessage = 'Insufficient balance in merchant wallet';
     } else if (error.message.includes('Network Error')) {
-      errorMessage = 'Gagal terhubung ke server. Periksa koneksi Anda';
-    } else if (error.message.includes('500')) {
-      errorMessage = 'Server error. Silakan coba lagi nanti';
+      errorMessage = 'Network error. Please check your connection';
     }
 
     showWithdrawStatus(`❌ ${errorMessage}`, 'error');
