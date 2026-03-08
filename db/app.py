@@ -131,7 +131,7 @@ class Database:
             conn.commit()
     
     def save_transaction(self, user_id, transaction_hash, amount_ton, from_address, to_address, memo="", nft_id=None, transaction_type="deposit"):
-        """Save transaction record"""
+        """Save transaction record - langsung confirmed untuk deposit"""
         with self.get_connection() as conn:
             # Convert TON to nano if needed
             amount_nano = str(int(amount_ton * 1_000_000_000))
@@ -139,13 +139,13 @@ class Database:
             cursor = conn.execute('''
                 INSERT INTO transactions (
                     user_id, transaction_hash, amount_ton, amount_nano, 
-                    from_address, to_address, memo, nft_id, transaction_type, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    from_address, to_address, memo, nft_id, transaction_type, status, confirmed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(transaction_hash) DO NOTHING
                 RETURNING id
             ''', (
                 user_id, transaction_hash, amount_ton, amount_nano,
-                from_address, to_address, memo, nft_id, transaction_type, 'pending'
+                from_address, to_address, memo, nft_id, transaction_type, 'confirmed'  # Langsung confirmed
             ))
             result = cursor.fetchone()
             conn.commit()
