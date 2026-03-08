@@ -64,36 +64,39 @@ class Database:
                 )
             ''')
             
-            # Create withdraw_requests table
             conn.execute('''
-                CREATE TABLE IF NOT EXISTS withdraw_requests (
+                CREATE TABLE withdraw_requests (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
                     telegram_id TEXT,
                     amount_ton REAL,
                     destination_address TEXT,
-                    status TEXT DEFAULT 'pending',
+                    reference TEXT UNIQUE,  -- Tambahkan kolom reference
                     transaction_hash TEXT,
+                    status TEXT DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    processed_at TIMESTAMP
+                    processed_at TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
                 )
             ''')
             
-            # Create payment_tracking table
+            # Pastikan payment_tracking punya kolom yang benar
+            conn.execute('DROP TABLE IF EXISTS payment_tracking')
             conn.execute('''
-                CREATE TABLE IF NOT EXISTS payment_tracking (
+                CREATE TABLE payment_tracking (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     reference TEXT UNIQUE,
                     body_base64_hash TEXT,
                     telegram_id TEXT,
                     amount REAL,
                     status TEXT DEFAULT 'pending',
+                    transaction_hash TEXT,  -- Tambahkan kolom ini
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
             
             conn.commit()
-            print(f"✅ Database initialized at {self.db_path}")
+            print("✅ Database tables recreated with correct schema")
     
     def save_user(self, telegram_id, telegram_username=None, 
                   telegram_first_name=None, telegram_last_name=None,
@@ -278,7 +281,8 @@ class Database:
         """Save withdraw request with reference"""
         with self.get_connection() as conn:
             cursor = conn.execute('''
-                INSERT INTO withdraw_requests (user_id, telegram_id, amount_ton, destination_address, reference, status)
+                INSERT INTO withdraw_requests 
+                (user_id, telegram_id, amount_ton, destination_address, reference, status)
                 VALUES (?, ?, ?, ?, ?, ?)
                 RETURNING id
             ''', (user_id, telegram_id, amount_ton, destination_address, reference, 'pending'))
@@ -294,6 +298,16 @@ class Database:
                 SET status = ?, transaction_hash = ?, processed_at = CURRENT_TIMESTAMP
                 WHERE reference = ?
             ''', (status, transaction_hash, reference))
+            conn.commit()
+    
+    def save_payment_tracking(self, reference, body_base64_hash, telegram_id, amount):
+        """Save payment tracking data"""
+        with self.get_connection() as conn:
+            conn.execute('''
+                INSERT OR IGNORE INTO payment_tracking 
+                (reference, body_base64_hash, telegram_id, amount, status)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (reference, body_base64_hash, telegram_id, amount, 'pending'))
             conn.commit()
     
     def update_payment_tracking_status(self, reference, status='completed', transaction_hash=None):
