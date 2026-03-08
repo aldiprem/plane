@@ -622,132 +622,116 @@ def process_withdraw():
         return jsonify({'success': False, 'error': 'Private key tidak tersedia di server'}), 500
     
     try:
-        # Gunakan TON Center API untuk mengirim transaksi
-        # Dokumentasi yang benar: https://toncenter.com/api/v2/#/transactions/post_sendTransaction
+        # Gunakan tonsdk untuk membuat transaksi
+        # Dokumentasi tonsdk: https://github.com/tonfactory/tonsdk
         
-        # Konversi amount ke nanoTON
-        amount_nano = int(amount_ton * 1_000_000_000)
+        print(f"📤 Mencoba metode tonsdk...")
         
-        # Buat comment
-        comment = f"wd:{telegram_id}:{reference}"
-        
-        # Siapkan payload untuk TON Center - format yang benar
-        # Address harus dalam format raw (0:...) atau user-friendly
-        # TON Center menerima kedua format
-        
-        # Untuk mengirim transaksi, kita perlu membuat BOC (Bag of Cells)
-        # Tapi TON Center juga menyediakan endpoint untuk mengirim dengan private key
-        
-        # ENDPOINT YANG BENAR: /api/v2/transactions/send (POST)
-        # Tapi sepertinya endpoint ini memerlukan BOC
-        
-        # Alternatif: Gunakan endpoint /api/v2/wallet/send jika wallet di-host di TON Center
-        # Tapi kita tidak punya wallet di TON Center
-        
-        print(f"📤 Mencoba metode alternatif...")
-        
-        # Metode 1: Menggunakan tonsdk untuk membuat BOC
         try:
             from tonsdk.contract.wallet import Wallets, WalletVersionEnum
-            from tonsdk.utils import to_nano
+            from tonsdk.utils import to_nano, bytes_to_b64
             from tonsdk.boc import Cell
+            import nacl.signing
             
             print(f"📦 Menggunakan tonsdk untuk membuat transaksi...")
             
-            # Buat wallet dari private key
-            wallet = Wallets.from_private_key(
-                private_key=PRIVATE_KEY,
-                version=WalletVersionEnum.v4r2,
-                workchain=0
-            )
+            # Konversi private key hex ke bytes
+            private_key_bytes = bytes.fromhex(PRIVATE_KEY)
             
-            # Dapatkan address dari wallet
-            wallet_address = wallet[2]
-            print(f"   Wallet address: {wallet_address}")
+            # Buat signing key dari private key
+            signing_key = nacl.signing.SigningKey(private_key_bytes)
             
-            # Buat transfer
-            transfer_query = wallet[0].create_transfer(
-                to_addr=destination_address,
-                amount=to_nano(amount_ton, 'ton'),
-                payload=comment,
-                send_mode=3
-            )
+            # Buat wallet dari private key - CARA YANG BENAR
+            # Gunakan Wallets.create() dengan private key
+            mnemonics = []  # Kosong karena kita pakai private key langsung
             
-            # Dapatkan BOC
-            boc = transfer_query['message'].to_boc(True).hex()
+            # Alternatif: create wallet dari private key
+            wallet = Wallets(version=WalletVersionEnum.v4r2, workchain=0)
             
-            print(f"   BOC created: {boc[:64]}...")
+            # Atau cara lain: import dari private key
+            # Untuk sementara, kita akan gunakan pendekatan berbeda
             
-            # Kirim BOC ke TON Center
-            headers = {
-                'X-API-Key': TONCENTER_API_KEY,
-                'Content-Type': 'application/json'
-            }
+            print(f"⚠️ tonsdk memerlukan pendekatan berbeda, beralih ke metode alternatif...")
             
-            payload = {
-                'boc': boc
-            }
-            
-            print(f"📤 Mengirim BOC ke TON Center...")
-            
-            response = requests.post(
-                'https://toncenter.com/api/v2/sendBoc',
-                json=payload,
-                headers=headers,
-                timeout=30
-            )
-            
-            print(f"   Response status: {response.status_code}")
-            print(f"   Response text: {response.text[:200]}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get('ok'):
-                    transaction_hash = result.get('result')
-                    print(f"✅ Transaksi berhasil dikirim: {transaction_hash}")
+            # Metode alternatif: gunakan pytoniq yang sudah terinstall
+            if TON_LIB_AVAILABLE:
+                from pytoniq import WalletV4, LiteClient, LiteBalancer
+                
+                print(f"📦 Menggunakan pytoniq untuk membuat transaksi...")
+                
+                # Gunakan LiteBalancer untuk koneksi
+                is_testnet = NETWORK == 'testnet'
+                
+                if is_testnet:
+                    client = LiteBalancer.from_testnet_config(trust_level=0)
+                else:
+                    client = LiteBalancer.from_mainnet_config(trust_level=0)
+                
+                async def send_transaction():
+                    await client.start_up()
                     
-                    # Simpan transaksi withdraw (negative amount)
-                    tx_id = db.save_transaction(
-                        user_id=user['id'],
-                        transaction_hash=transaction_hash,
-                        amount_ton=-amount_ton,
-                        from_address=WEB_ADDRESS,
-                        to_address=destination_address,
-                        memo=f"withdraw:{reference}",
-                        transaction_type='withdraw'
+                    # Buat wallet dari private key
+                    wallet = await WalletV4.from_private_key(
+                        client=client,
+                        private_key=PRIVATE_KEY_BYTES
                     )
                     
-                    # Update withdraw request
-                    db.update_withdraw_request_by_reference(reference, transaction_hash, 'completed')
+                    # Buat comment
+                    comment = f"wd:{telegram_id}:{reference}"
                     
-                    # Update payment tracking
-                    db.update_payment_tracking_status(reference, 'completed', transaction_hash)
+                    # Kirim transaksi - amount dalam nanoTON
+                    amount_nano = int(amount_ton * 1_000_000_000)
                     
-                    return jsonify({
-                        'success': True,
-                        'transaction_hash': transaction_hash,
-                        'amount_ton': amount_ton,
-                        'message': 'Withdraw berhasil dikirim ke blockchain!'
-                    })
-                else:
-                    error_msg = result.get('error', 'Unknown error')
-                    print(f"❌ Gagal mengirim transaksi: {error_msg}")
-                    return jsonify({
-                        'success': False,
-                        'error': f'Gagal mengirim transaksi: {error_msg}'
-                    }), 500
+                    # Transfer dengan body sebagai string
+                    tx_hash = await wallet.transfer(
+                        destination=destination_address,
+                        amount=amount_nano,
+                        body=comment
+                    )
+                    
+                    await client.close()
+                    return tx_hash
+                
+                # Jalankan async function
+                import asyncio
+                tx_hash = asyncio.run(send_transaction())
+                
+                print(f"✅ Transaksi berhasil dikirim: {tx_hash}")
+                
+                # Simpan transaksi withdraw (negative amount)
+                tx_id = db.save_transaction(
+                    user_id=user['id'],
+                    transaction_hash=tx_hash,
+                    amount_ton=-amount_ton,
+                    from_address=WEB_ADDRESS,
+                    to_address=destination_address,
+                    memo=f"withdraw:{reference}",
+                    transaction_type='withdraw'
+                )
+                
+                # Update withdraw request
+                db.update_withdraw_request_by_reference(reference, tx_hash, 'completed')
+                
+                # Update payment tracking
+                db.update_payment_tracking_status(reference, 'completed', tx_hash)
+                
+                return jsonify({
+                    'success': True,
+                    'transaction_hash': tx_hash,
+                    'amount_ton': amount_ton,
+                    'message': 'Withdraw berhasil dikirim ke blockchain!'
+                })
             else:
-                print(f"❌ HTTP Error {response.status_code}: {response.text}")
                 return jsonify({
                     'success': False,
-                    'error': f'HTTP Error {response.status_code}: {response.text[:200]}'
-                }), response.status_code
+                    'error': 'Tidak ada library TON yang tersedia (pytoniq tidak terinstall)'
+                }), 500
                 
-        except ImportError:
-            print(f"⚠️ tonsdk tidak terinstall, install dengan: pip install tonsdk")
+        except ImportError as e:
+            print(f"❌ Import error: {e}")
             return jsonify({
                 'success': False,
-                'error': 'tonsdk library tidak tersedia di server'
+                'error': 'Library TON tidak tersedia di server'
             }), 500
             
     except Exception as e:
