@@ -46,16 +46,29 @@ PRIVATE_KEY_BYTES = bytes.fromhex(PRIVATE_KEY) if PRIVATE_KEY else None
 
 # Cek ketersediaan library TON
 try:
-    from pytoniq import begin_cell, Address, WalletV5R1, WalletV5R2
+    from pytoniq import begin_cell, Address
     from pytoniq_core import Cell
     TON_LIB_AVAILABLE = True
-    W5_AVAILABLE = True
-    print("✅ pytoniq library tersedia untuk W5")
+    
+    # Cek ketersediaan wallet V5
+    W5_AVAILABLE = False
+    try:
+        from pytoniq import WalletV5
+        W5_AVAILABLE = True
+        print("✅ WalletV5 tersedia")
+    except ImportError:
+        try:
+            from pytoniq import WalletV5R1, WalletV5R2
+            W5_AVAILABLE = True
+            print("✅ WalletV5R1/R2 tersedia")
+        except ImportError:
+            print("⚠️ WalletV5 tidak tersedia, withdraw W5 tidak akan berfungsi")
+    
+    print("✅ pytoniq library tersedia")
 except ImportError:
     TON_LIB_AVAILABLE = False
     W5_AVAILABLE = False
     print("⚠️ pytoniq tidak terinstall. Install dengan: pip install pytoniq pytoniq-core")
-    print("⚠️ W5 withdraw tidak akan berfungsi tanpa pytoniq")
 
 # ==================== ENDPOINT UNTUK MEMBUAT PAYLOAD ====================
 
@@ -148,7 +161,7 @@ def create_payload():
 
 @app.route('/api/withdraw-w5', methods=['POST'])
 def withdraw_w5():
-    """Withdraw otomatis untuk wallet W5 menggunakan pytoniq"""
+    """Withdraw otomatis untuk wallet W5"""
     data = request.json
     telegram_id = data.get('telegram_id')
     amount_ton = float(data.get('amount_ton', 0))
@@ -182,39 +195,40 @@ def withdraw_w5():
         return jsonify({'success': False, 'error': 'Private Key tidak dikonfigurasi'}), 500
     
     if not W5_AVAILABLE:
-        return jsonify({'success': False, 'error': 'pytoniq tidak terinstall untuk W5'}), 500
+        # Fallback ke mode manual jika W5 tidak tersedia
+        return withdraw_manual(telegram_id, amount_ton, destination_address, user)
     
     try:
-        print(f"\n🔄 Processing W5 withdraw for user {telegram_id}")
+        print(f"\n🔄 Processing withdraw for user {telegram_id}")
         print(f"   Amount: {amount_ton} TON")
         print(f"   To: {destination_address}")
         print(f"   From: {WEB_ADDRESS}")
         
-        # Buat fungsi async untuk handle W5
-        async def process_w5_withdraw():
-            nonlocal amount_ton, destination_address, telegram_id, user
-            
-            # Buat wallet W5 dari private key
-            # Coba dengan W5R1 dulu
-            wallet = None
+        # Buat fungsi async
+        async def process_withdraw():
+            # Coba import wallet yang sesuai
             try:
-                wallet = await WalletV5R1.from_private_key(
+                from pytoniq import WalletV5
+                wallet = await WalletV5.from_private_key(
                     private_key=PRIVATE_KEY_BYTES,
                     workchain=0
                 )
-                print("✅ Using WalletV5R1")
-            except Exception as e1:
-                print(f"⚠️ WalletV5R1 error: {e1}")
+                print("✅ Using WalletV5")
+            except ImportError:
                 try:
-                    # Fallback ke W5R2
+                    from pytoniq import WalletV5R1
+                    wallet = await WalletV5R1.from_private_key(
+                        private_key=PRIVATE_KEY_BYTES,
+                        workchain=0
+                    )
+                    print("✅ Using WalletV5R1")
+                except ImportError:
+                    from pytoniq import WalletV5R2
                     wallet = await WalletV5R2.from_private_key(
                         private_key=PRIVATE_KEY_BYTES,
                         workchain=0
                     )
                     print("✅ Using WalletV5R2")
-                except Exception as e2:
-                    print(f"❌ WalletV5R2 error: {e2}")
-                    raise Exception("Tidak bisa membuat wallet W5 dari private key")
             
             # Dapatkan seqno
             try:
@@ -263,31 +277,20 @@ def withdraw_w5():
             print(f"📡 TON Center response: {send_result}")
             
             if send_result.get('ok'):
-                # Generate transaction hash
                 tx_hash = hashlib.sha256(transfer.to_boc()).hexdigest()
-                
-                return {
-                    'success': True,
-                    'transaction_hash': tx_hash,
-                    'amount': amount_ton,
-                    'to_address': destination_address,
-                    'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
-                }
+                return {'success': True, 'transaction_hash': tx_hash}
             else:
-                return {
-                    'success': False,
-                    'error': f'Gagal mengirim: {send_result.get("error", "Unknown error")}'
-                }
+                return {'success': False, 'error': send_result.get('error', 'Unknown error')}
         
-        # Jalankan fungsi async
+        # Jalankan async
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(process_w5_withdraw())
+        result = loop.run_until_complete(process_withdraw())
         loop.close()
         
         if result['success']:
             # Simpan di database
-            tx_id = db.save_transaction(
+            db.save_transaction(
                 user_id=user['id'],
                 transaction_hash=result['transaction_hash'],
                 amount_ton=amount_ton,
@@ -297,42 +300,50 @@ def withdraw_w5():
                 transaction_type='withdraw'
             )
             
-            # Catat di withdraw_requests
-            with db.get_connection() as conn:
-                conn.execute('''
-                    CREATE TABLE IF NOT EXISTS withdraw_requests (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER,
-                        telegram_id TEXT,
-                        amount_ton REAL,
-                        destination_address TEXT,
-                        status TEXT DEFAULT 'completed',
-                        transaction_hash TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-                
-                conn.execute('''
-                    INSERT INTO withdraw_requests 
-                    (user_id, telegram_id, amount_ton, destination_address, status, transaction_hash)
-                    VALUES (?, ?, ?, ?, 'completed', ?)
-                ''', (user['id'], telegram_id, amount_ton, destination_address, result['transaction_hash']))
-                conn.commit()
-            
-            return jsonify(result)
+            return jsonify({
+                'success': True,
+                'transaction_hash': result['transaction_hash'],
+                'message': f'✅ Withdraw {amount_ton} TON berhasil dikirim!'
+            })
         else:
-            return jsonify(result), 500
+            return jsonify({'success': False, 'error': result['error']}), 500
             
     except Exception as e:
         print(f"❌ Withdraw error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': f'Error: {str(e)}'
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
 
+def withdraw_manual(telegram_id, amount_ton, destination_address, user):
+    """Fallback manual withdraw jika W5 tidak tersedia"""
+    try:
+        with db.get_connection() as conn:
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS withdraw_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    telegram_id TEXT,
+                    amount_ton REAL,
+                    destination_address TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor = conn.execute('''
+                INSERT INTO withdraw_requests (user_id, telegram_id, amount_ton, destination_address)
+                VALUES (?, ?, ?, ?)
+                RETURNING id
+            ''', (user['id'], telegram_id, amount_ton, destination_address))
+            
+            request_id = cursor.fetchone()[0]
+            conn.commit()
+        
+        return jsonify({
+            'success': True,
+            'request_id': request_id,
+            'message': '✅ Withdraw request recorded! Akan diproses manual.'
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ==================== CEK SALDO WALLET ====================
 
