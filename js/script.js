@@ -40,17 +40,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // ==================== WITHDRAW FUNCTIONS ====================
 
-// ==================== WITHDRAW FUNCTIONS - PERBAIKAN ====================
-
 async function processWithdraw() {
-  // Validasi koneksi wallet
+  // Validasi koneksi wallet user (untuk menerima dana)
   if (!tonConnectUI?.connected) {
     showWithdrawStatus('⚠️ Please connect your wallet first to receive funds', 'warning');
     await tonConnectUI.connect();
     return;
   }
 
-  // Validasi login Telegram
   if (!telegramUser) {
     showWithdrawStatus('⚠️ Please open in Telegram Web App', 'warning');
     return;
@@ -59,7 +56,6 @@ async function processWithdraw() {
   const amount = parseFloat(document.getElementById('withdraw-amount').value);
   const maxWithdraw = parseFloat(document.getElementById('max-withdraw').textContent);
 
-  // Validasi amount
   if (isNaN(amount) || amount < 0.1) {
     showWithdrawStatus('❌ Minimum withdraw is 0.1 TON', 'error');
     return;
@@ -81,18 +77,11 @@ async function processWithdraw() {
   withdrawBtn.innerHTML = '<span>⏳</span> Processing Withdrawal...';
 
   try {
-    const destinationAddress = tonConnectUI.account?.address; // Alamat user yang menerima withdraw
+    const destinationAddress = tonConnectUI.account?.address;
 
-    if (!destinationAddress) {
-      throw new Error('Wallet address not found');
-    }
+    debugLog('📤 Processing withdrawal:', { amount, destination: destinationAddress });
 
-    debugLog('📤 Processing withdrawal:', {
-      amount,
-      destination: destinationAddress
-    });
-
-    // 1. Minta reference dari backend (initiate withdraw)
+    // 1. Initiate withdraw di backend
     const initResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/initiate-withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -104,75 +93,72 @@ async function processWithdraw() {
     });
 
     const initData = await initResponse.json();
-    
     if (!initData.success) {
       throw new Error(initData.error || 'Failed to initiate withdraw');
     }
 
     debugLog('✅ Withdraw initiated:', initData);
-    
-    // 2. Gunakan TON Pay untuk membuat transfer DARI merchant KE user
-    // Catatan: Ini akan memunculkan popup di wallet user untuk menandatangani transaksi
-    // Tapi transaksi ini akan mengirim DARI wallet merchant (WEB_ADDRESS) KE wallet user
-    
-    if (!tonPay || !tonPay.createTonPayTransfer) {
-      throw new Error('TON Pay SDK tidak tersedia');
-    }
 
-    // Buat transfer menggunakan TON Pay
-    const { message, reference, bodyBase64Hash } = await tonPay.createTonPayTransfer(
-      {
-        amount: amount,
-        asset: "TON",
-        recipientAddr: destinationAddress, // Alamat user yang menerima withdraw
-        senderAddr: CONFIG.WEB_ADDRESS,    // Alamat merchant (WEB_ADDRESS)
-        commentToSender: `Withdrawal for user ${telegramUser.id}`,
-        commentToRecipient: `Withdrawal from Marketplace`,
-      },
-      {
-        chain: CONFIG.NETWORK,
-        // apiKey: "YOUR_TONPAY_API_KEY" // Opsional, untuk dashboard
-      }
-    );
+    // 2. BUAT TRANSFER DARI MERCHANT KE USER
+    // Format amount ke nano
+    const amountNano = (amount * 1_000_000_000).toString();
 
-    debugLog('✅ TON Pay transfer created:', { message, reference, bodyBase64Hash });
-
-    // 3. Simpan tracking data
-    await fetch(`${CONFIG.TUNNEL_URL}/api/store-payment-tracking`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        reference: reference,
-        bodyBase64Hash: bodyBase64Hash,
-        telegram_id: telegramUser.id.toString(),
-        amount: amount,
-        type: 'withdraw'
-      })
-    });
-
-    // 4. Kirim transaksi - INI YANG AKAN MEMINTA TANDA TANGAN DARI WALLET USER
-    // TAPI ini akan mengirim DARI wallet merchant, bukan dari wallet user
-    // Untuk ini, kita perlu wallet merchant yang terhubung di frontend
-    
+    // Buat transaction message
     const transaction = {
       validUntil: Math.floor(Date.now() / 1000) + 600, // 10 menit
-      messages: [message]
+      messages: [
+        {
+          address: destinationAddress, // Alamat tujuan (user)
+          amount: amountNano, // Amount dalam nanoTON
+          // Optional: Tambahkan comment
+          payload: base64EncodeComment(`Withdrawal for user ${telegramUser.id}`)
+        }
+      ]
     };
 
-    debugLog('📤 Sending transaction from merchant wallet:', transaction);
+    debugLog('📤 Sending transaction from MERCHANT wallet:', transaction);
 
-    // Ini akan memunculkan popup di wallet user untuk menandatangani
-    // Tapi seharusnya wallet merchant yang tanda tangan, bukan wallet user
+    // 3. INI PENTING: Kita perlu wallet MERCHANT yang menandatangani, bukan wallet user
+    // TAPI karena merchant wallet tidak terhubung di frontend, kita perlu solusi lain
+
+    // SOLUSI 1: Buat endpoint di backend untuk menandatangani transaksi
+    // Tapi ini tidak aman karena private key ada di server
+
+    // SOLUSI 2: Gunakan TON Pay dengan cara yang benar - merchant harus connect wallet-nya
+    // Untuk testing, Anda bisa connect wallet merchant di browser yang sama
+
+    // Untuk sementara, kita akan gunakan TON Pay API dengan asumsi 
+    // Anda sudah connect wallet merchant di frontend
+
+    // Cek apakah wallet yang terhubung adalah merchant wallet
+    const connectedAddress = tonConnectUI.account?.address;
+    const merchantAddress = CONFIG.WEB_ADDRESS;
+
+    // Konversi address format
+    const normalizedConnected = connectedAddress?.replace('0:', '')?.toLowerCase();
+    const normalizedMerchant = merchantAddress?.replace('UQ', '')?.replace('0:', '')?.toLowerCase();
+
+    if (normalizedConnected !== normalizedMerchant) {
+      showWithdrawStatus('⚠️ Please connect MERCHANT wallet to process withdrawal', 'warning');
+
+      // Tampilkan dialog untuk connect merchant wallet
+      if (confirm('You need to connect the merchant wallet to process withdrawal. Connect now?')) {
+        await tonConnectUI.disconnect();
+        setTimeout(() => tonConnectUI.connect(), 500);
+      }
+      return;
+    }
+
+    // Kirim transaksi dari merchant wallet
     const result = await tonConnectUI.sendTransaction(transaction);
-    
-    debugLog('✅ Transaction sent:', result);
+    debugLog('✅ Transaction sent from merchant:', result);
 
-    // 5. Verifikasi di backend
+    // 4. Verifikasi di backend
     const verifyResponse = await fetch(`${CONFIG.TUNNEL_URL}/api/verify-withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        reference: reference,
+        reference: initData.reference,
         transaction_hash: result.boc,
         status: 'completed'
       })
@@ -181,19 +167,15 @@ async function processWithdraw() {
     const verifyData = await verifyResponse.json();
     debugLog('✅ Withdraw verified:', verifyData);
 
-    // Tampilkan sukses
     showWithdrawStatus(
       `✅ Withdrawal successful! ${amount} TON sent to your wallet.`,
       'success'
     );
 
-    document.getElementById('withdraw-amount').value = '1.0';
-
     // Refresh data
     setTimeout(() => {
       loadUserBalance();
       loadTransactionHistory();
-      loadWithdrawHistory();
     }, 3000);
 
   } catch (error) {
@@ -201,19 +183,25 @@ async function processWithdraw() {
 
     let errorMessage = error.message;
     if (error.message.includes('rejected')) {
-      errorMessage = 'Transaction cancelled by user';
+      errorMessage = 'Transaction cancelled';
     } else if (error.message.includes('Insufficient balance')) {
       errorMessage = 'Insufficient balance in merchant wallet';
-    } else if (error.message.includes('Network Error')) {
-      errorMessage = 'Network error. Please check your connection';
     }
 
     showWithdrawStatus(`❌ ${errorMessage}`, 'error');
-
   } finally {
     withdrawBtn.disabled = false;
     withdrawBtn.innerHTML = originalText;
   }
+}
+
+// Helper function untuk encode comment ke Base64
+function base64EncodeComment(comment) {
+  const commentBytes = new TextEncoder().encode(comment);
+  // Prefix untuk text comment (4 byte 0)
+  const prefix = new Uint8Array([0, 0, 0, 0]);
+  const fullBytes = new Uint8Array([...prefix, ...commentBytes]);
+  return btoa(String.fromCharCode(...fullBytes));
 }
 
 // Fungsi lainnya tetap sama...
