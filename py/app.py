@@ -203,12 +203,15 @@ def withdraw():
             from pytoniq import WalletV4R2, LiteClient
             
             # Buat provider LiteClient untuk koneksi ke blockchain
+            # from_mainnet_config() tanpa parameter atau dengan config yang benar
             provider = LiteClient.from_mainnet_config(
-                trust_level=0,  # Level kepercayaan (0 = trust everything)
-                liteservers=1   # Jumlah liteserver
+                trust_level=0  # Hanya trust_level yang diterima
             )
             
-            # CONNECT, bukan start!
+            # Atau alternatif: from_config() dengan konfigurasi lengkap
+            # provider = LiteClient.from_mainnet_config()  # tanpa parameter
+            
+            # CONNECT
             await provider.connect()
             
             try:
@@ -222,15 +225,25 @@ def withdraw():
                 wallet_address = wallet.address.to_string()
                 print(f"📌 Wallet address: {wallet_address}")
                 
-                # Dapatkan seqno menggunakan method yang tersedia
+                # Dapatkan seqno via TON Center API (lebih reliable)
                 try:
-                    # Coba dapatkan seqno melalui get_account_state
-                    account_state = await provider.get_account_state(wallet_address)
-                    seqno = account_state.seqno if hasattr(account_state, 'seqno') else 0
-                    print(f"📊 Seqno: {seqno}")
+                    seqno_response = requests.get(
+                        f'https://toncenter.com/api/v2/getAddressInformation',
+                        params={'address': wallet_address},
+                        headers={'X-API-Key': TONCENTER_API_KEY},
+                        timeout=10
+                    )
+                    
+                    seqno_data = seqno_response.json()
+                    if seqno_data.get('ok') and seqno_data.get('result'):
+                        seqno = seqno_data['result'].get('seqno', 0)
+                        print(f"📊 Seqno from TON Center: {seqno}")
+                    else:
+                        seqno = 0
+                        print(f"⚠️ Gagal get seqno dari TON Center, pakai 0")
                 except Exception as e:
                     seqno = 0
-                    print(f"⚠️ Gagal get seqno, pakai 0: {e}")
+                    print(f"⚠️ Error get seqno, pakai 0: {e}")
                 
                 # Buat comment/memo
                 timestamp = int(time.time())
@@ -284,6 +297,8 @@ def withdraw():
                     }
             except Exception as e:
                 print(f"❌ Error in transfer: {e}")
+                import traceback
+                traceback.print_exc()
                 raise
             finally:
                 # Pastikan provider di-close
