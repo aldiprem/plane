@@ -616,3 +616,39 @@ body {
         bottom: 10px;
     }
 }
+
+/* Withdraw Card */
+.withdraw-card {
+  border-left: 4px solid var(--warning-color);
+}
+
+.withdraw-container {
+  animation: fadeIn 0.5s ease;
+}
+
+.status-message.warning {
+  background: rgba(255, 193, 7, 0.1);
+  color: #856404;
+  border: 1px solid #ffeeba;
+  padding: var(--spacing-md);
+  border-radius: var(--border-radius);
+  margin-bottom: var(--spacing-md);
+}
+
+.withdraw-info {
+  background: #f8f9fa;
+  border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+  margin: var(--spacing-lg) 0;
+  font-size: 0.9rem;
+}
+
+.withdraw-info .info-row {
+  justify-content: space-between;
+  padding: var(--spacing-xs) 0;
+}
+
+#withdraw-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
